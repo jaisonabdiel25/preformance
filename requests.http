@@ -1,0 +1,208 @@
+### API de autenticacion - peticiones de prueba
+#
+# Requiere la extension "REST Client" de VS Code (humao.rest-client).
+# Pulsa "Send Request" sobre cada bloque. Las variables @accessToken y
+# @refreshToken se rellenan solas a partir de la respuesta del login.
+
+@host = http://localhost:3000
+@baseUrl = {{host}}/api/v1
+
+@email = ana.torres@example.com
+@password = Secreta123
+
+###############################################################################
+# 1. Salud del servicio (comprueba tambien la conexion a PostgreSQL)
+###############################################################################
+
+GET {{host}}/health
+
+###############################################################################
+# 2. Registro - camino feliz -> 201
+###############################################################################
+
+# @name register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "name": "Ana Torres"
+}
+
+###############################################################################
+# 3. Registro duplicado -> 409 CONFLICT
+#    (ejecuta el bloque anterior dos veces)
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "name": "Ana Torres"
+}
+
+###############################################################################
+# 4. Validacion: contrasena debil -> 422 con detalle por campo
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "debil@example.com",
+  "password": "123",
+  "name": "X"
+}
+
+###############################################################################
+# 5. Validacion: email invalido -> 422
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "esto-no-es-un-email",
+  "password": "Secreta123",
+  "name": "Prueba"
+}
+
+###############################################################################
+# 6. Validacion: campo no declarado -> 422 (lo rechaza strictObject)
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "intruso@example.com",
+  "password": "Secreta123",
+  "name": "Intruso",
+  "role": "admin"
+}
+
+###############################################################################
+# 7. Login correcto -> 200. Guarda los tokens para los bloques siguientes.
+###############################################################################
+
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+@accessToken = {{login.response.body.accessToken}}
+@refreshToken = {{login.response.body.refreshToken}}
+
+###############################################################################
+# 8. Login con contrasena incorrecta -> 401 (mensaje generico)
+###############################################################################
+
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "PasswordIncorrecta1"
+}
+
+###############################################################################
+# 9. Login con email inexistente -> 401 con el MISMO mensaje que el bloque 8
+###############################################################################
+
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "no-existe@example.com",
+  "password": "PasswordIncorrecta1"
+}
+
+###############################################################################
+# 10. Perfil con token valido -> 200
+###############################################################################
+
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{accessToken}}
+
+###############################################################################
+# 11. Perfil sin cabecera Authorization -> 401
+###############################################################################
+
+GET {{baseUrl}}/auth/me
+
+###############################################################################
+# 12. Perfil con token manipulado -> 401
+###############################################################################
+
+GET {{baseUrl}}/auth/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWxzbyJ9.firma-invalida
+
+###############################################################################
+# 13. Rotacion: canjear el refresh token -> 200 con un par nuevo
+###############################################################################
+
+# @name refresh
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+@rotatedRefreshToken = {{refresh.response.body.refreshToken}}
+
+###############################################################################
+# 14. Reusar el refresh token YA canjeado -> 401
+#     (vuelve a lanzar el bloque 13 sin haber hecho login de nuevo)
+###############################################################################
+
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+###############################################################################
+# 15. Logout con el refresh token rotado -> 204
+###############################################################################
+
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{rotatedRefreshToken}}"
+}
+
+###############################################################################
+# 16. Usar el refresh token tras el logout -> 401
+###############################################################################
+
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{rotatedRefreshToken}}"
+}
+
+###############################################################################
+# 17. Ruta inexistente -> 404 en formato JSON
+###############################################################################
+
+GET {{baseUrl}}/no-existe
+
+###############################################################################
+# 18. JSON malformado -> 400 INVALID_JSON
+###############################################################################
+
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "roto@example.com",

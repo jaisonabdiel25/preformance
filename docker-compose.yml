@@ -1,0 +1,38 @@
+# Solo PostgreSQL corre en Docker. La API se ejecuta en el host con `npm run dev`,
+# y las migraciones con `npm run migrate:up`.
+#
+# El nombre del proyecto fija el del volumen (preformance_pgdata): cambiarlo dejaria
+# huerfanos los datos existentes.
+name: preformance
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: preformance-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-preformance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-preformance}
+      POSTGRES_DB: ${POSTGRES_DB:-preformance}
+    ports:
+      # Publicado en el host: es por donde se conectan la API y cualquier cliente
+      # (psql, DBeaver, la extension de PostgreSQL de VS Code).
+      #
+      # Por defecto NO es 5432: un PostgreSQL instalado nativamente en la maquina
+      # ocupa ese puerto y se queda con las conexiones a localhost, produciendo un
+      # "password authentication failed" desconcertante (el contenedor ni se entera).
+      - "${DB_PORT:-5441}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `docker compose up -d --wait` espera a esta condicion, asi que las
+      # migraciones no se lanzan contra una base que aun esta arrancando.
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-preformance} -d ${POSTGRES_DB:-preformance}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:

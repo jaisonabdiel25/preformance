@@ -1,0 +1,21 @@
+node_modules
+dist
+coverage
+
+.git
+.gitignore
+
+# Nunca hornear secretos en una capa de la imagen: docker-compose inyecta las
+# variables en tiempo de ejecucion via `env_file`, que se lee desde el host.
+.env
+.env.*
+!.env.example
+
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+*.log
+npm-debug.log*
+README.md
+requests.http
