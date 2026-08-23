@@ -1,6 +1,6 @@
 # Preformance API
 
-API REST de autenticación construida con **Node.js + Express 5 + TypeScript + PostgreSQL**, siguiendo el **patrón repository** con inyección de dependencias por constructor.
+API REST de autenticación construida con **Node.js + Express 5 + TypeScript + Prisma 7 + PostgreSQL**, siguiendo el **patrón repository** con inyección de dependencias por constructor.
 
 ---
 
@@ -12,7 +12,7 @@ API REST de autenticación construida con **Node.js + Express 5 + TypeScript + P
 cp .env.example .env          # PowerShell: Copy-Item .env.example .env
 npm install
 docker compose up -d --wait   # levanta la BD y espera a que esté lista
-npm run migrate:up            # aplica el esquema
+npm run migrate:up            # aplica el esquema (prisma migrate deploy)
 npm run dev                   # API en http://localhost:3000
 ```
 
@@ -46,11 +46,11 @@ HTTP
  │
  ├─ controller  traduce req/res ↔ servicio. Sin lógica de negocio.
  │
- ├─ service     casos de uso. No conoce Express ni SQL.
+ ├─ service     casos de uso. No conoce Express ni Prisma.
  │
- ├─ repository  única capa con SQL. Consultas parametrizadas.
+ ├─ repository  única capa que consulta la base de datos.
  │
- └─ PostgreSQL
+ └─ Prisma → PostgreSQL
 ```
 
 ### Estructura
@@ -58,7 +58,12 @@ HTTP
 Las dos capas que trabajan contra contratos —servicios y repositorios— separan el **qué** del **cómo** en carpetas hermanas: `interfaces/` declara la operación, `implementations/` la resuelve.
 
 ```
+prisma/
+├── schema.prisma               · FUENTE ÚNICA DE VERDAD del modelo de datos
+└── migrations/                 · SQL generado desde el esquema
+
 src/
+├── generated/prisma/           · cliente tipado (generado, ignorado por git)
 ├── controllers/
 │   ├── AuthController.ts
 │   └── HealthController.ts
@@ -78,11 +83,11 @@ src/
 │   │   ├── IHealthRepository.ts
 │   │   ├── IRefreshTokenRepository.ts
 │   │   └── IUserRepository.ts
-│   └── implementations/          · todo lo específico de PostgreSQL
+│   └── implementations/          · todo lo específico de Prisma
 │       ├── HealthRepository.ts
 │       ├── RefreshTokenRepository.ts
 │       ├── UserRepository.ts
-│       └── pg-error.ts           · traduce SQLSTATE a errores de dominio
+│       └── prisma-error.ts       · traduce P2002 a ConflictError
 ├── validators/
 │   ├── schemas/auth.schemas.ts
 │   ├── AuthValidator.ts
@@ -95,16 +100,27 @@ src/
 ├── routes/         · declaración de rutas y su cadena de middlewares
 ├── errors/         · jerarquía AppError y su traducción a códigos HTTP
 ├── dtos/           · proyecciones de salida (toPublicUser)
-├── config/         · entorno validado con Zod y pool de pg
-├── types/          · tipos de fila y augmentación de Express
+├── config/         · entorno validado con Zod, y cliente Prisma sobre un pool de pg
+├── types/          · tipos de fila (derivados de Prisma) y augmentación de Express
 ├── container.ts    · composition root
 ├── app.ts          · construcción de la app Express
 └── server.ts       · arranque y apagado ordenado
 ```
 
-La división no es decorativa: **`implementations/` es la única carpeta que se tira a la basura al cambiar de tecnología**. Migrar a MongoDB significa escribir un `repositories/implementations/` nuevo; cambiar bcrypt por argon2, una clase nueva en `services/implementations/`. `interfaces/` y todo lo que la consume se quedan intactos.
+La división no es decorativa: **`implementations/` es la única carpeta que se tira a la basura al cambiar de tecnología**. Cambiar de motor de datos significa escribir un `repositories/implementations/` nuevo; cambiar bcrypt por argon2, una clase nueva en `services/implementations/`. `interfaces/` y todo lo que la consume se quedan intactos.
 
-**Convención de nombres**: el archivo se llama igual que la clase que exporta (`AuthService.ts` → `class AuthService`) y su contrato lleva el prefijo `I` (`IAuthService.ts` → `interface IAuthService`). Los módulos que no exportan una clase única conservan kebab-case: `app-error.ts` agrupa las siete clases de error, `pg-error.ts` y `user.dto.ts` exportan funciones, `auth.schemas.ts` exporta esquemas Zod.
+**Convención de nombres**: el archivo se llama igual que la clase que exporta (`AuthService.ts` → `class AuthService`) y su contrato lleva el prefijo `I` (`IAuthService.ts` → `interface IAuthService`). Los módulos que no exportan una clase única conservan kebab-case: `app-error.ts` agrupa las siete clases de error, `prisma-error.ts` y `user.dto.ts` exportan funciones, `auth.schemas.ts` exporta esquemas Zod.
+
+### Una sola definición del modelo de datos
+
+`prisma/schema.prisma` es la fuente de la que salen las migraciones SQL, el cliente tipado y los tipos de fila. `types/user.types.ts` ya no los declara a mano, los **deriva**:
+
+```ts
+export type UserRow            = Omit<User, "passwordHash">;  // lo normal
+export type UserCredentialsRow = User;                        // solo para login
+```
+
+Añadir una columna al esquema y regenerar actualiza el tipo solo, así que tabla y tipo no pueden desincronizarse.
 
 ### Inyección de dependencias
 
@@ -132,9 +148,9 @@ Esto es lo que hace la lógica de negocio verificable de forma aislada: `AuthSer
 
 Para `products`, por ejemplo:
 
-1. `migrations/` — nueva migración SQL (`npm run migrate:create -- create-products-table`).
+1. `prisma/schema.prisma` — el modelo `Product`, y después `npm run migrate:dev`.
 2. `repositories/interfaces/IProductRepository.ts` — el contrato de persistencia.
-3. `repositories/implementations/ProductRepository.ts` — el SQL.
+3. `repositories/implementations/ProductRepository.ts` — las consultas Prisma.
 4. `services/interfaces/IProductService.ts` — el contrato de negocio.
 5. `services/implementations/ProductService.ts` — la lógica.
 6. `validators/schemas/product.schemas.ts` + `validators/ProductValidator.ts`.
@@ -201,7 +217,8 @@ Todos los errores salen con la misma forma:
 
 Vale la pena conocer las que no son obvias al leer el código:
 
-- **Contraseñas**: bcrypt con coste 12 (`$2b$12$`). Nunca se almacena ni se registra la contraseña en claro, y `toPublicUser()` construye la respuesta campo a campo para que `password_hash` no pueda escaparse por una respuesta.
+- **Contraseñas**: bcrypt con coste 12 (`$2b$12$`). Nunca se almacena ni se registra la contraseña en claro.
+- **`omit` global sobre `passwordHash`**: Prisma devuelve el modelo completo por defecto, así que el cliente lleva configurado que el hash no salga de la base de datos. Sólo lo desactiva `UserRepository.findCredentialsByEmail` — se llama así, y no `findByEmail`, para que ese único camino salte a la vista al auditar el código. Encima, `toPublicUser()` construye la respuesta campo a campo, así que un campo nuevo del modelo tampoco se filtra solo.
 - **Access token vs refresh token**: el access token es un JWT corto (15 min) y autocontenido — no se puede revocar, sólo caducar. El refresh token es una cadena **opaca** aleatoria de 384 bits cuyo **SHA-256** es lo único que se guarda: quien lea la tabla no obtiene ningún token utilizable.
 - **Rotación de refresh tokens**: cada `/refresh` revoca el token entregado y emite uno nuevo. Un token robado sirve una sola vez, y el robo se hace visible porque quien llegue segundo recibe un 401.
 - **Enumeración de usuarios**: login con email inexistente y login con contraseña incorrecta devuelven el mismo `401` y el mismo mensaje. Además, cuando el email no existe se ejecuta un `bcrypt.compare` contra un hash ficticio para que ambos caminos tarden lo mismo — sin eso, el tiempo de respuesta delataría qué cuentas existen.
@@ -224,9 +241,14 @@ Vale la pena conocer las que no son obvias al leer el código:
 | `npm run build` | Compila TypeScript a `dist/` |
 | `npm start` | Ejecuta la build de producción |
 | `npm run typecheck` | Comprueba tipos sin emitir |
-| `npm run migrate:up` | Aplica las migraciones pendientes |
-| `npm run migrate:down` | Revierte la última migración |
-| `npm run migrate:create -- <nombre>` | Crea una migración SQL vacía |
+| `npm run migrate:dev` | Tras editar `schema.prisma`: crea la migración, la aplica y regenera el cliente |
+| `npm run migrate:up` | Aplica las migraciones pendientes (`prisma migrate deploy`, para producción) |
+| `npm run migrate:status` | Qué migraciones están aplicadas |
+| `npm run migrate:reset` | **Destructivo**: borra la BD y reaplica el historial |
+| `npm run generate` | Regenera el cliente sin tocar la base de datos |
+| `npm run db:studio` | Abre Prisma Studio, un GUI para inspeccionar los datos |
+
+> **No hay migraciones `down`.** Prisma no las soporta: en desarrollo se deshace con `migrate:reset`, y en producción revertir significa escribir una migración nueva que deshaga la anterior.
 
 ---
 
@@ -235,7 +257,8 @@ Vale la pena conocer las que no son obvias al leer el código:
 - **ESM nativo**: los imports relativos llevan extensión `.js` aunque el fuente sea `.ts`. Es el comportamiento de `module: "nodenext"`, no una errata.
 - **Sin `try/catch` en los controladores**: Express 5 propaga solo los rechazos de handlers `async` al middleware de error.
 - **Métodos de controlador como propiedades flecha**: conserva el `this` al pasarlos al router por referencia, sin `.bind()`.
-- **Los tipos de fila (`UserRow`) son `type`, no `interface`**: `pool.query<T>()` exige que `T` sea asignable a `QueryResultRow`, y sólo los alias de tipo obtienen index signature implícita.
+- **Los tipos de fila se derivan, no se escriben**: `UserRow` sale del cliente que Prisma genera desde el esquema. Si tocas `schema.prisma`, ejecuta `npm run generate` o nada compilará contra el modelo nuevo.
+- **Los repositorios reciben `AppPrismaClient`, no `PrismaClient`**: el `omit` global estrecha los tipos de retorno del cliente, así que el tipo se deriva en `config/database.ts` con `ReturnType<typeof instantiatePrisma>`.
 - **El archivo se llama como la clase, y su contrato lleva prefijo `I`**: `AuthService.ts` / `IAuthService.ts`. Los tipos que forman parte del contrato viven junto a la interfaz (`AccessTokenPayload` en `ITokenService.ts`); los que son detalle de implementación, junto a la clase (`TokenServiceConfig` en `TokenService.ts`).
 
 ---
@@ -258,9 +281,13 @@ docker build --target runtime -t preformance-api:prod .
 docker run --rm -p 3000:3000 --env-file .env preformance-api:prod
 ```
 
-Multi-stage: `deps` → `build` (compila con `tsc`) → `runtime`. La imagen final lleva únicamente `dist/` y las dependencias de producción, y corre como usuario `node`.
+Multi-stage: `deps` → `build` (genera el cliente Prisma y compila con `tsc`) → `runtime`. La imagen final lleva únicamente `dist/` y las dependencias de producción, y corre como usuario `node`.
 
-Si lo pruebas en local contra la BD del compose, `DATABASE_URL` debe apuntar a `host.docker.internal:5441` en lugar de `localhost:5441`: dentro del contenedor, `localhost` es el propio contenedor. En el despliegue real apuntará a tu base de datos gestionada. Y recuerda ejecutar `npm run migrate:up` como paso de despliegue, antes de arrancar la nueva versión.
+Detalle de Prisma que conviene conocer: el cliente se genera dentro de `src/generated/prisma`, así que `tsc` lo compila a `dist/` con el resto del código. Por eso el runtime no necesita la CLI de Prisma ni copiar `node_modules/.prisma`. Los `npm ci` usan `--ignore-scripts` para que el `postinstall` no intente generar antes de que exista el esquema.
+
+Al arrancar verás un aviso de Prisma sobre no detectar la versión de OpenSSL. Es inocuo aquí: con el driver adapter de `pg`, las conexiones las hace `pg`, no el motor Rust.
+
+Si lo pruebas en local contra la BD del compose, `DATABASE_URL` debe apuntar a `host.docker.internal:5441` en lugar de `localhost:5441`: dentro del contenedor, `localhost` es el propio contenedor. En el despliegue real apuntará a tu base de datos gestionada. Y recuerda ejecutar `npm run migrate:up` (`prisma migrate deploy`) como paso de despliegue, antes de arrancar la nueva versión: el contenedor **no** aplica migraciones al arrancar.
 
 ---
 

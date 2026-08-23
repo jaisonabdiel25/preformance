@@ -6,16 +6,23 @@ Este archivo orienta a Claude Code (claude.ai/code) al trabajar con el código d
 
 ```bash
 docker compose up -d --wait   # arranca PostgreSQL (en Docker solo está la BD)
-npm run migrate:up            # aplica las migraciones pendientes
+npm run migrate:up            # aplica las migraciones pendientes (prisma migrate deploy)
 npm run dev                   # API en http://localhost:3000, hot reload con tsx
 
 npm run typecheck             # tsc --noEmit
 npm run build                 # compila a dist/
 npm start                     # ejecuta la build compilada
 
-npm run migrate:down                    # revierte la última migración
-npm run migrate:create -- <nombre>      # nueva migración SQL vacía
+npm run migrate:dev           # tras editar schema.prisma: crea migración, la aplica y regenera
+npm run generate              # regenera el cliente sin tocar la BD
+npm run migrate:status        # qué migraciones están aplicadas
+npm run migrate:reset         # DESTRUCTIVO: borra la BD y reaplica todo
+npm run db:studio             # GUI para inspeccionar datos
 ```
+
+**Tras cambiar `prisma/schema.prisma` hay que ejecutar `npm run migrate:dev`** (o al menos `npm run generate`), o el cliente en `src/generated/prisma` se queda viejo y nada compila contra el esquema nuevo. El `postinstall` ejecuta `prisma generate`, así que un clon recién instalado ya arranca.
+
+**No hay migraciones `down`.** Prisma no las soporta: para deshacer en desarrollo se usa `migrate:reset`, que borra la base y reaplica el historial. En producción, revertir significa escribir una migración nueva que deshaga la anterior.
 
 **No hay framework de tests configurado.** La verificación es manual: `requests.http` (extensión REST Client de VS Code) cubre el camino feliz y los de error de cada endpoint. Si añades un runner, la inyección por constructor permite probar los servicios con dobles: sin base de datos y sin bcrypt.
 
@@ -30,8 +37,18 @@ npm run migrate:create -- <nombre>      # nueva migración SQL vacía
 Flujo de una petición; cada capa conoce solo la interfaz de la siguiente:
 
 ```
-rate limit → validate(Zod) → auth guard → controller → service → repository → PostgreSQL
+rate limit → validate(Zod) → auth guard → controller → service → repository → Prisma → PostgreSQL
 ```
+
+### El esquema de datos manda
+
+`prisma/schema.prisma` es la **fuente única de verdad**. De ahí salen tres cosas, y ninguna se escribe a mano:
+
+1. Las migraciones SQL de `prisma/migrations/`.
+2. El cliente tipado en `src/generated/prisma/` (ignorado por git; lo reconstruye `prisma generate`).
+3. Los tipos de fila: `types/user.types.ts` ya no los declara, los **deriva** del cliente (`UserRow = Omit<User, "passwordHash">`).
+
+Por eso añadir una columna no puede desincronizar el tipo de la tabla: el tipo no existe hasta que se regenera desde el esquema.
 
 **`src/container.ts` es el composition root**: el único archivo del proyecto que llama a `new` y el único punto donde una interfaz se encuentra con su implementación. Todo lo demás depende de contratos (`IAuthService`, `ITokenService`, `IUserRepository`…). Esto sostiene el diseño: renombrar o mover una clase de implementación toca exactamente un consumidor.
 
@@ -40,7 +57,9 @@ Servicios y repositorios separan el *qué* del *cómo* en carpetas hermanas:
 - `interfaces/` — el contrato, junto con los tipos que forman parte de él (`AccessTokenPayload` vive en `ITokenService.ts`).
 - `implementations/` — la clase concreta y sus tipos de detalle (`TokenServiceConfig` vive en `TokenService.ts`).
 
-`implementations/` es la carpeta que se tira a la basura al cambiar de tecnología: todo lo específico de PostgreSQL está bajo `repositories/implementations/` (incluido `pg-error.ts`, que traduce códigos SQLSTATE a errores de dominio para que los servicios nunca los vean); bcrypt existe solo en `PasswordService.ts` y JWT solo en `TokenService.ts`.
+`implementations/` es la carpeta que se tira a la basura al cambiar de tecnología: todo lo específico de Prisma está bajo `repositories/implementations/` (incluido `prisma-error.ts`, que traduce el código `P2002` a `ConflictError` para que los servicios nunca vean errores de Prisma); bcrypt existe solo en `PasswordService.ts` y JWT solo en `TokenService.ts`.
+
+Con Prisma los repositorios son finos —`findById` es un `findUnique`—, y eso es esperable: `PrismaClient` ya *es* una capa de acceso a datos. La interfaz sigue ganándose el sitio porque los servicios dependen de `IUserRepository`, no del cliente, así que se pueden probar con dobles y los tipos de Prisma no se filtran hacia arriba.
 
 Los controladores dependen de las interfaces de servicio y son quienes sostienen el contrato HTTP: códigos de estado y forma de la respuesta (`AuthController.toAuthResponse` aplana el resultado del servicio). Los servicios jamás ven `req` ni `res`.
 
@@ -75,19 +94,20 @@ Nota: el índice parcial `refresh_tokens_expires_at_idx` se creó para dar sopor
 
 ## Convenciones
 
-- **ESM con `module: "nodenext"`**: los imports relativos llevan extensión `.js` aunque el fuente sea `.ts`. No es una errata.
+- **ESM con `module: "nodenext"`**: los imports relativos llevan extensión `.js` aunque el fuente sea `.ts`. No es una errata. Aplica también al cliente generado: `../generated/prisma/client.js`, nunca `../generated/prisma`.
 - **Express 5**: los rechazos de handlers async se propagan solos al middleware de error. Los controladores no llevan `try/catch` y no existe ningún `asyncHandler`.
 - **Los métodos de los controladores son propiedades flecha**, para que `this` sobreviva al pasarlos al router por referencia sin `.bind()`.
-- **Los tipos de fila son `type`, no `interface`**: `pool.query<T>()` exige que `T` sea asignable a `QueryResultRow`, y solo los alias de tipo obtienen index signature implícita.
-- **Nomenclatura de archivos**: el archivo se llama como la clase que exporta (`AuthService.ts`) y su contrato lleva prefijo `I` (`IAuthService.ts`). Los módulos que no exportan una sola clase se quedan en kebab-case: `app-error.ts` (siete clases de error), `pg-error.ts`, `user.dto.ts`, `auth.schemas.ts` y los archivos de rutas.
-- **Las migraciones son SQL plano** con secciones `-- Up Migration` / `-- Down Migration`, evitando la fricción de ts-node bajo ESM. Ambas direcciones deben funcionar: se espera que `migrate:down` deje el esquema limpio.
-- **Todo el SQL va parametrizado** y confinado a las implementaciones de repositorio. Los repositorios seleccionan columnas explícitas en vez de `SELECT *`, para que un futuro `ALTER TABLE` no altere la forma de un tipo de fila.
+- **Los repositorios reciben `AppPrismaClient`, no `PrismaClient`**. El `omit` global estrecha los tipos de retorno del cliente, así que `PrismaClient` a secas no describe la instancia real. El tipo se deriva en `config/database.ts` con `ReturnType<typeof instantiatePrisma>`.
+- **Prisma 7 exige un driver adapter**: `new PrismaClient()` sin argumentos lanza, y `datasourceUrl` ya no existe. Se usa `@prisma/adapter-pg` sobre un `pg.Pool` propio, lo que permite seguir controlando `max` y los timeouts desde el entorno.
+- **Nomenclatura de archivos**: el archivo se llama como la clase que exporta (`AuthService.ts`) y su contrato lleva prefijo `I` (`IAuthService.ts`). Los módulos que no exportan una sola clase se quedan en kebab-case: `app-error.ts` (siete clases de error), `prisma-error.ts`, `user.dto.ts`, `auth.schemas.ts` y los archivos de rutas.
+- **Las consultas viven solo en las implementaciones de repositorio.** Ningún servicio ni controlador toca `prisma`. Si algún día hace falta SQL crudo, va por `$queryRaw` **dentro de un repositorio**, nunca fuera.
 
 ## Invariantes de seguridad que conviene preservar
 
 Son deliberadas y fáciles de romper sin querer:
 
-- `toPublicUser()` construye la respuesta campo a campo, de modo que `password_hash` no puede escaparse a través de una columna nueva.
+- **`omit` global sobre `passwordHash`** en `config/database.ts`: Prisma devuelve el modelo completo por defecto, así que sin esto el hash viajaría en cada consulta. El único sitio que lo desactiva es `UserRepository.findCredentialsByEmail`, que se llama así —y no `findByEmail`— precisamente para que sea visible en cualquier auditoría. Su tipo de retorno es `UserCredentialsRow`, que no debe salir de `AuthService`.
+- `toPublicUser()` construye la respuesta campo a campo, de modo que un campo nuevo del modelo no puede escaparse solo. Además acepta `UserRow`, que ya no tiene `passwordHash`, así que el hash ni siquiera es visible desde ahí.
 - El login devuelve un único 401 genérico tanto para "email desconocido" como para "contraseña incorrecta", **y además** ejecuta `passwordService.fakeCompare` en la rama del email desconocido para que el tiempo de respuesta no revele qué cuentas existen.
 - Los esquemas usan `z.strictObject` y rechazan campos no declarados (un `role: "admin"` colado se corta en la validación).
 - `jwt.verify` fija `algorithms: ["HS256"]`; sin eso un atacante puede presentar `alg: "none"` o forzar una confusión de algoritmo.
@@ -95,4 +115,6 @@ Son deliberadas y fáciles de romper sin querer:
 
 ## Añadir un módulo
 
-Para `products`: migración → `repositories/interfaces/IProductRepository.ts` → `repositories/implementations/ProductRepository.ts` → `services/interfaces/IProductService.ts` → `services/implementations/ProductService.ts` → `validators/schemas/product.schemas.ts` + `validators/ProductValidator.ts` → `controllers/ProductController.ts` + `routes/product.routes.ts`, y luego cablearlo en `container.ts` y registrarlo en `routes/index.ts`. Esos dos últimos son los únicos archivos existentes que cambian.
+Para `products`: modelo en `prisma/schema.prisma` + `npm run migrate:dev` → `repositories/interfaces/IProductRepository.ts` → `repositories/implementations/ProductRepository.ts` → `services/interfaces/IProductService.ts` → `services/implementations/ProductService.ts` → `validators/schemas/product.schemas.ts` + `validators/ProductValidator.ts` → `controllers/ProductController.ts` + `routes/product.routes.ts`, y luego cablearlo en `container.ts` y registrarlo en `routes/index.ts`. Esos dos últimos son los únicos archivos existentes que cambian.
+
+Los DTO de entrada se siguen definiendo con Zod a mano. Un generador tipo `zod-prisma-types` derivaría del esquema los tipos, longitudes y nulabilidad, pero no reglas de negocio como "la contraseña debe llevar una mayúscula" ni el `.strictObject` que rechaza campos no declarados. El esquema Prisma describe la tabla; el esquema Zod describe qué acepta la API. Son cosas distintas y ambas hacen falta.

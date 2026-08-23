@@ -11,3 +11,13 @@ npm-debug.log*
 
 .DS_Store
 Thumbs.db
+
+# Cliente de Prisma. Se reconstruye con `npm run generate`, y el postinstall
+# lo hace solo tras un `npm install`.
+/src/generated/prisma
+
+# Documentacion de Prisma para agentes, descargada por `prisma init`.
+# Se ignora igual que node_modules: contenido de terceros, restaurable.
+# `skills-lock.json` SI se versiona — es el manifiesto que dice cuales tocan,
+# la misma relacion que hay entre node_modules y package-lock.json.
+.agents/

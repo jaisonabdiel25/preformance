@@ -1,70 +1,57 @@
-import type { Pool } from "pg";
-
-import { ConflictError } from "../../errors/app-error.js";
-import type { UserRow } from "../../types/user.types.js";
+﻿import { ConflictError } from "../../errors/app-error.js";
+import type { AppPrismaClient } from "../../config/database.js";
+import type { UserCredentialsRow, UserRow } from "../../types/user.types.js";
 import type { CreateUserData, IUserRepository } from "../interfaces/IUserRepository.js";
-import { isUniqueViolation } from "./pg-error.js";
-
-/** Columnas explicitas en vez de `SELECT *`: un ALTER TABLE futuro no cambia la forma de UserRow. */
-const COLUMNS = "id, email, password_hash, name, created_at, updated_at";
+import { isUniqueConstraintError } from "./prisma-error.js";
 
 /**
- * Implementacion PostgreSQL de IUserRepository.
+ * Implementacion Prisma de IUserRepository.
  *
- * Es el unico lugar del proyecto con SQL de usuarios. Todas las consultas van
- * parametrizadas ($1, $2...), nunca por interpolacion de cadenas.
+ * Es el unico lugar del proyecto que consulta el modelo `user`. El cliente lleva
+ * `omit: { user: { passwordHash: true } }` global, asi que las consultas de aqui
+ * devuelven usuarios sin hash salvo que lo pidan explicitamente.
  */
 export class UserRepository implements IUserRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly prisma: AppPrismaClient) {}
 
   async findById(id: string): Promise<UserRow | null> {
-    const { rows } = await this.pool.query<UserRow>(
-      `SELECT ${COLUMNS} FROM users WHERE id = $1`,
-      [id],
-    );
-
-    return rows[0] ?? null;
+    return this.prisma.user.findUnique({ where: { id } });
   }
 
-  async findByEmail(email: string): Promise<UserRow | null> {
-    const { rows } = await this.pool.query<UserRow>(
-      `SELECT ${COLUMNS} FROM users WHERE email = $1`,
-      [email],
-    );
-
-    return rows[0] ?? null;
+  async findCredentialsByEmail(email: string): Promise<UserCredentialsRow | null> {
+    return this.prisma.user.findUnique({
+      where: { email },
+      // Unica desactivacion del omit global en todo el proyecto.
+      omit: { passwordHash: false },
+    });
   }
 
   async existsByEmail(email: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query(
-      "SELECT 1 FROM users WHERE email = $1",
-      [email],
-    );
+    // `select: { id: true }` en lugar de traer la fila entera: solo interesa la
+    // existencia, no los datos.
+    const found = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
 
-    return (rowCount ?? 0) > 0;
+    return found !== null;
   }
 
   async create(data: CreateUserData): Promise<UserRow> {
     try {
-      const { rows } = await this.pool.query<UserRow>(
-        `INSERT INTO users (email, password_hash, name)
-         VALUES ($1, $2, $3)
-         RETURNING ${COLUMNS}`,
-        [data.email, data.passwordHash, data.name],
-      );
-
-      const created = rows[0];
-      if (!created) {
-        throw new Error("El INSERT de usuario no devolvio ninguna fila");
-      }
-
-      return created;
+      return await this.prisma.user.create({
+        data: {
+          email: data.email,
+          passwordHash: data.passwordHash,
+          name: data.name,
+        },
+      });
     } catch (error) {
       // Red de seguridad ante la carrera entre existsByEmail() y este INSERT: dos
       // registros simultaneos con el mismo email pasan ambos la comprobacion previa
       // y solo la restriccion UNIQUE los separa. Se traduce aqui para que el
-      // servicio no tenga que conocer codigos SQLSTATE.
-      if (isUniqueViolation(error, "users_email_key")) {
+      // servicio no tenga que conocer los codigos de error de Prisma.
+      if (isUniqueConstraintError(error, "email")) {
         throw new ConflictError("Ya existe una cuenta registrada con ese email");
       }
 

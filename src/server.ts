@@ -39,9 +39,9 @@ async function shutdown(signal: string): Promise<void> {
 
     try {
       await container.shutdown();
-      console.log("[api] pool de base de datos cerrado");
-    } catch (poolError) {
-      console.error("[api] error cerrando el pool:", poolError);
+      console.log("[api] conexiones de base de datos cerradas");
+    } catch (dbError) {
+      console.error("[api] error cerrando las conexiones de base de datos:", dbError);
       process.exit(1);
     }
 

@@ -1,8 +1,7 @@
 import { rateLimit } from "express-rate-limit";
 import type { RequestHandler } from "express";
-import type { Pool } from "pg";
 
-import { createPool } from "./config/database.js";
+import { createDatabase, type AppPrismaClient } from "./config/database.js";
 import { env as defaultEnv, type Env } from "./config/env.js";
 import { AuthController } from "./controllers/AuthController.js";
 import { HealthController } from "./controllers/HealthController.js";
@@ -19,7 +18,7 @@ import { AuthValidator } from "./validators/AuthValidator.js";
 /** Piezas que la capa HTTP necesita del contenedor. */
 export interface Container {
   env: Env;
-  pool: Pool;
+  prisma: AppPrismaClient;
   authController: AuthController;
   authValidator: AuthValidator;
   authMiddleware: AuthMiddleware;
@@ -28,7 +27,7 @@ export interface Container {
   /** Cupo holgado para /refresh, que los clientes llaman de forma rutinaria. */
   refreshRateLimiter: RequestHandler;
   healthController: HealthController;
-  /** Cierra el pool de conexiones. Lo llama el apagado ordenado del servidor. */
+  /** Desconecta Prisma y cierra el pool. Lo llama el apagado ordenado del servidor. */
   shutdown(): Promise<void>;
 }
 
@@ -46,12 +45,12 @@ export interface Container {
  */
 export function buildContainer(env: Env = defaultEnv): Container {
   // --- Infraestructura ------------------------------------------------------
-  const pool = createPool(env);
+  const { prisma, pool } = createDatabase(env);
 
-  // --- Repositorios: implementan I*Repository, unica capa que conoce SQL ----
-  const userRepository = new UserRepository(pool);
-  const refreshTokenRepository = new RefreshTokenRepository(pool);
-  const healthRepository = new HealthRepository(pool);
+  // --- Repositorios: implementan I*Repository, unica capa que conoce Prisma --
+  const userRepository = new UserRepository(prisma);
+  const refreshTokenRepository = new RefreshTokenRepository(prisma);
+  const healthRepository = new HealthRepository(prisma);
 
   // --- Servicios: implementan I*Service, sin dependencias de HTTP -----------
   const passwordService = new PasswordService(env.BCRYPT_ROUNDS);
@@ -108,7 +107,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
 
   return {
     env,
-    pool,
+    prisma,
     authController,
     authValidator,
     authMiddleware,
@@ -116,6 +115,9 @@ export function buildContainer(env: Env = defaultEnv): Container {
     refreshRateLimiter,
     healthController,
     shutdown: async () => {
+      // El orden importa: Prisma primero, para que suelte las conexiones que tenga
+      // tomadas del pool antes de que este las cierre.
+      await prisma.$disconnect();
       await pool.end();
     },
   };

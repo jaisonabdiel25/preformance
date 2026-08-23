@@ -12,15 +12,21 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "migrate": "node --env-file-if-exists=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js",
-    "migrate:up": "npm run migrate -- up",
-    "migrate:down": "npm run migrate -- down",
-    "migrate:create": "npm run migrate -- create --migration-file-language sql"
+    "generate": "prisma generate",
+    "postinstall": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:up": "prisma migrate deploy",
+    "migrate:create": "prisma migrate dev --create-only",
+    "migrate:status": "prisma migrate status",
+    "migrate:reset": "prisma migrate reset",
+    "db:studio": "prisma studio"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -37,7 +43,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.2.0",
     "@types/pg": "^8.23.1",
-    "node-pg-migrate": "^9.0.0",
+    "prisma": "^7.9.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }

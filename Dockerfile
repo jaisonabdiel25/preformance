@@ -20,18 +20,28 @@ ENV NODE_ENV=production
 
 # ---------------------------------------------------------------------------
 # deps: todas las dependencias, incluidas las de desarrollo, porque `build`
-# necesita el compilador de TypeScript.
+# necesita el compilador de TypeScript y la CLI de Prisma.
+#
+# `--ignore-scripts` evita que el postinstall lance `prisma generate` antes de
+# haber copiado el esquema; se genera explicitamente en la etapa `build`.
 # ---------------------------------------------------------------------------
 FROM base AS deps
 COPY package.json package-lock.json ./
-RUN npm ci --include=dev
+RUN npm ci --include=dev --ignore-scripts
 
 # ---------------------------------------------------------------------------
-# build: compila TypeScript a dist/
+# build: genera el cliente de Prisma y compila TypeScript a dist/
+#
+# El cliente se emite a src/generated/prisma (ver el bloque `generator` del
+# esquema), asi que forma parte del arbol de fuentes y tsc lo compila a dist/
+# junto con el resto. Por eso el runtime no necesita ni la CLI de Prisma ni
+# copiar node_modules/.prisma: el cliente ya viaja dentro de dist/.
 # ---------------------------------------------------------------------------
 FROM deps AS build
-COPY tsconfig.json ./
+COPY tsconfig.json prisma.config.ts ./
+COPY prisma ./prisma
 COPY src ./src
+RUN npx prisma generate
 RUN npm run build
 
 # ---------------------------------------------------------------------------
@@ -39,9 +49,18 @@ RUN npm run build
 # compilado; ni TypeScript ni codigo fuente llegan aqui.
 # ---------------------------------------------------------------------------
 FROM base AS runtime
+
+# --ignore-scripts otra vez: aqui no hay esquema ni CLI, y el postinstall fallaria.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
 COPY --from=build /app/dist ./dist
+
+# Las migraciones no se aplican al arrancar el contenedor: son un paso de despliegue
+# aparte (`npx prisma migrate deploy`). Se copian para poder ejecutarlas desde esta
+# misma imagen si hiciera falta.
+COPY prisma ./prisma
+COPY prisma.config.ts ./
 
 # Usuario sin privilegios (viene en la imagen oficial de node): si alguien
 # consigue ejecucion de codigo, no la consigue como root.

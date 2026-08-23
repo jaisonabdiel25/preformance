@@ -1,29 +1,27 @@
+import type { RefreshToken, User } from "../generated/prisma/client.js";
+
 /**
- * Estos son `type` y no `interface` a proposito: `pool.query<T>()` exige que T sea
- * asignable a `QueryResultRow` (un tipo con index signature). Los alias de tipo
- * obtienen index signature implicita, las interfaces no, asi que con `interface`
- * el generico de `pg` no compila.
+ * Los tipos de fila ya NO se escriben a mano: se derivan del cliente que Prisma
+ * genera desde `prisma/schema.prisma`. Anadir una columna en el esquema los actualiza
+ * solo, asi que no pueden desincronizarse de la tabla.
  */
 
-/** Fila cruda de la tabla `users`, en snake_case tal cual la devuelve PostgreSQL. */
-export type UserRow = {
-  id: string;
-  email: string;
-  password_hash: string;
-  name: string;
-  created_at: Date;
-  updated_at: Date;
-};
+/**
+ * Un usuario tal y como sale de la base de datos en el caso normal: SIN el hash de
+ * la contrasena, porque el cliente lleva `omit: { user: { passwordHash: true } }`
+ * configurado globalmente en `config/database.ts`.
+ */
+export type UserRow = Omit<User, "passwordHash">;
 
-/** Fila cruda de la tabla `refresh_tokens`. */
-export type RefreshTokenRow = {
-  id: string;
-  user_id: string;
-  token_hash: string;
-  expires_at: Date;
-  revoked_at: Date | null;
-  created_at: Date;
-};
+/**
+ * Usuario CON el hash de la contrasena. Solo lo produce
+ * `IUserRepository.findCredentialsByEmail`, que desactiva el omit a proposito.
+ * Este tipo no debe salir nunca de AuthService.
+ */
+export type UserCredentialsRow = User;
+
+/** Fila de `refresh_tokens`. */
+export type RefreshTokenRow = RefreshToken;
 
 /** Proyeccion segura de un usuario: es lo unico que puede cruzar la frontera HTTP. */
 export interface PublicUser {

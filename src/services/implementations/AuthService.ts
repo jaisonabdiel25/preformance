@@ -21,7 +21,7 @@ const INVALID_REFRESH_TOKEN = "El refresh token no es valido, ha caducado o ya f
  * Implementacion de los casos de uso de autenticacion.
  *
  * Todas sus dependencias entran por constructor tipadas como INTERFACES, nunca como
- * clases concretas: no conoce PostgreSQL, ni bcrypt, ni JWT. Tampoco conoce Express
+ * clases concretas: no conoce Prisma, ni bcrypt, ni JWT. Tampoco conoce Express
  * —no recibe `req` ni `res`, ni decide codigos HTTP—, asi que es ejecutable desde un
  * test, un script o una cola sin montar un servidor.
  */
@@ -57,7 +57,9 @@ export class AuthService implements IAuthService {
 
   async login(dto: LoginDto): Promise<AuthResult> {
     const email = AuthService.normalizeEmail(dto.email);
-    const user = await this.userRepository.findByEmail(email);
+
+    // Unico punto del proyecto que trae el hash de la contrasena desde la BD.
+    const user = await this.userRepository.findCredentialsByEmail(email);
 
     if (!user) {
       // Se gasta el mismo tiempo que costaria verificar una contrasena real antes
@@ -68,7 +70,7 @@ export class AuthService implements IAuthService {
 
     const passwordMatches = await this.passwordService.compare(
       dto.password,
-      user.password_hash,
+      user.passwordHash,
     );
 
     if (!passwordMatches) {
@@ -96,7 +98,7 @@ export class AuthService implements IAuthService {
       throw new UnauthorizedError(INVALID_REFRESH_TOKEN);
     }
 
-    const user = await this.userRepository.findById(stored.user_id);
+    const user = await this.userRepository.findById(stored.userId);
     if (!user) {
       // El ON DELETE CASCADE deberia impedirlo; si ocurre, se trata como token invalido.
       throw new UnauthorizedError(INVALID_REFRESH_TOKEN);
