@@ -90,7 +90,7 @@ Dos credenciales con papeles distintos — se entiende leyendo `AuthService.refr
 
 Ambas interfaces se mantienen ajustadas a lo que los endpoints realmente llaman. Los métodos sin consumidor se eliminaron a propósito en lugar de dejarlos como superficie especulativa; devuélvelos junto con la funcionalidad que los necesite (la detección de reuso de refresh tokens querría un "revocar todas las sesiones de este usuario"; un job de limpieza querría un "borrar caducados").
 
-Nota: el índice parcial `refresh_tokens_expires_at_idx` se creó para dar soporte a una consulta de limpieza que ya no existe, así que ahora mismo no lo consume nadie — `findActiveByHash` se resuelve por el índice único de `token_hash`.
+Índices de `refresh_tokens`: el único de `token_hash` (que es el que resuelve `findActiveByHash`) y uno sobre `user_id` para el borrado en cascada. El índice parcial que existía antes desapareció al pasar a Prisma, que no sabe expresarlos en el esquema — no se echa en falta porque su consumidor tampoco existe ya. Si algún día hace falta uno parcial, se añade editando a mano el SQL de una migración generada.
 
 ## Convenciones
 

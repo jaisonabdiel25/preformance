@@ -5,11 +5,20 @@ coverage
 .git
 .gitignore
 
-# Nunca hornear secretos en una capa de la imagen: docker-compose inyecta las
-# variables en tiempo de ejecucion via `env_file`, que se lee desde el host.
+# El cliente de Prisma se regenera dentro de la etapa `build` con `prisma generate`.
+# Excluirlo evita arrastrar al contexto un cliente construido en el host.
+src/generated
+
+# Nunca hornear secretos en una capa de la imagen. La imagen de produccion recibe
+# las variables en tiempo de ejecucion (`docker run --env-file`), no al construirse.
 .env
 .env.*
 !.env.example
+
+# Documentacion de Prisma para agentes: ~30 archivos que no pinta nada enviar
+# al daemon en cada build.
+.agents
+skills-lock.json
 
 Dockerfile
 .dockerignore
@@ -18,4 +27,5 @@ docker-compose.yml
 *.log
 npm-debug.log*
 README.md
+CLAUDE.md
 requests.http

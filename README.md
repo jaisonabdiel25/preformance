@@ -127,9 +127,10 @@ Añadir una columna al esquema y regenerar actualiza el tipo solo, así que tabl
 [src/container.ts](src/container.ts) es el **composition root**: el único archivo del proyecto donde se ejecuta `new`, y el único punto donde interfaz e implementación se encuentran. En el resto del código las clases sólo se conocen por su contrato.
 
 ```ts
-const userRepository = new UserRepository(pool);
-const authService    = new AuthService(userRepository, refreshTokenRepository, passwordService, tokenService);
-const authController = new AuthController(authService);
+const { prisma, pool } = createDatabase(env);
+const userRepository   = new UserRepository(prisma);
+const authService      = new AuthService(userRepository, refreshTokenRepository, passwordService, tokenService);
+const authController   = new AuthController(authService);
 ```
 
 Cada capa declara sus dependencias como **interfaces**, nunca como clases concretas:
@@ -142,7 +143,7 @@ Cada capa declara sus dependencias como **interfaces**, nunca como clases concre
 | `HealthController` | `IHealthService` |
 | `HealthService` | `IHealthRepository` |
 
-Esto es lo que hace la lógica de negocio verificable de forma aislada: `AuthService` no conoce PostgreSQL, ni bcrypt, ni JWT, así que un test puede inyectar dobles instantáneos en lugar de levantar una base de datos y ejecutar bcrypt real (~200 ms por hash con coste 12).
+Esto es lo que hace la lógica de negocio verificable de forma aislada: `AuthService` no conoce Prisma, ni bcrypt, ni JWT, así que un test puede inyectar dobles instantáneos en lugar de levantar una base de datos y ejecutar bcrypt real (~200 ms por hash con coste 12).
 
 ### Añadir un módulo nuevo
 
@@ -243,6 +244,7 @@ Vale la pena conocer las que no son obvias al leer el código:
 | `npm run typecheck` | Comprueba tipos sin emitir |
 | `npm run migrate:dev` | Tras editar `schema.prisma`: crea la migración, la aplica y regenera el cliente |
 | `npm run migrate:up` | Aplica las migraciones pendientes (`prisma migrate deploy`, para producción) |
+| `npm run migrate:create` | Genera la migración **sin aplicarla**, para editar el SQL a mano antes (índices parciales, triggers y demás que el esquema no sabe expresar) |
 | `npm run migrate:status` | Qué migraciones están aplicadas |
 | `npm run migrate:reset` | **Destructivo**: borra la BD y reaplica el historial |
 | `npm run generate` | Regenera el cliente sin tocar la base de datos |
@@ -265,7 +267,8 @@ Vale la pena conocer las que no son obvias al leer el código:
 
 ## Notas de desarrollo
 
-- **Conectarse a la base de datos** con un cliente (DBeaver, psql, la extensión de VS Code): `localhost:5441`, usuario / contraseña / BD `preformance`. Todo configurable en `.env`.
+- **Inspeccionar datos**: `npm run db:studio` abre Prisma Studio en el navegador. Es lo más cómodo y no requiere instalar nada.
+- **Conectarse con otro cliente** (DBeaver, psql, la extensión de VS Code): `localhost:5441`, usuario / contraseña / BD `preformance`. Todo configurable en `.env`.
 - **Una consulta rápida sin cliente**: `docker compose exec db psql -U preformance -d preformance -c "SELECT email, name FROM users;"`
 - **Parar la base de datos** conservando los datos: `docker compose down`. El volumen `preformance_pgdata` sobrevive.
 - **Empezar de cero**, borrando también los datos: `docker compose down -v`.
