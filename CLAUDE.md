@@ -23,6 +23,17 @@ npm run db:studio             # GUI para inspeccionar datos
 
 **El seed no lo ejecutan las migraciones.** En Prisma 7 hay que lanzarlo aparte; el único comando que lo encadena es `migrate:reset`. Una base migrada pero sin sembrar deja `countries` vacía, y entonces **todo registro con `countryCode` falla con 422** porque la clave foránea no encuentra el país.
 
+Los **roles** son la excepción: `USER` y `ADMIN` los inserta la propia migración `roles_table`, no el seeder, porque un usuario no puede existir sin rol y el esquema nunca debe quedar en un estado donde registrarse sea imposible. El seeder los repite con `upsert` para poder reparar una fila borrada sin un `migrate:reset` destructivo.
+
+## Roles: tabla, no enum
+
+`roles` es una tabla para poder añadir roles sin migración y describirlos desde la BD. A cambio, `user.role.code` es un `string` para TypeScript: `=== "ADMNI"` compilaría y denegaría el acceso en silencio. Dos defensas, y hay que respetarlas:
+
+1. **Nunca compares contra literales.** Usa `ROLE.ADMIN` de `constants/roles.ts`, donde el compilador valida la propiedad.
+2. **El arranque verifica el catálogo.** `RoleService.assertKnownRolesExist()` corre en `server.ts` antes de `listen` y aborta el proceso si falta algún código de `ROLE`. Añadir un rol al código sin sembrarlo hace que la API no arranque, que es exactamente lo que se busca.
+
+Al añadir un rol hay que tocar tres sitios: `ROLE` en `constants/roles.ts`, la lista del seeder, y una migración que lo inserte.
+
 **Tras cambiar `prisma/schema.prisma` hay que ejecutar `npm run migrate:dev`** (o al menos `npm run generate`), o el cliente en `src/generated/prisma` se queda viejo y nada compila contra el esquema nuevo. El `postinstall` ejecuta `prisma generate`, así que un clon recién instalado ya arranca.
 
 **No hay migraciones `down`.** Prisma no las soporta: para deshacer en desarrollo se usa `migrate:reset`, que borra la base y reaplica el historial. En producción, revertir significa escribir una migración nueva que deshaga la anterior.
@@ -112,7 +123,7 @@ Son deliberadas y fáciles de romper sin querer:
 - **`omit` global sobre `passwordHash`** en `config/database.ts`: Prisma devuelve el modelo completo por defecto, así que sin esto el hash viajaría en cada consulta. El único sitio que lo desactiva es `UserRepository.findCredentialsByEmail`, que se llama así —y no `findByEmail`— precisamente para que sea visible en cualquier auditoría. Su tipo de retorno es `UserCredentialsRow`, que no debe salir de `AuthService`.
 - `toPublicUser()` construye la respuesta campo a campo, de modo que un campo nuevo del modelo no puede escaparse solo. Además acepta `UserRow`, que ya no tiene `passwordHash`, así que el hash ni siquiera es visible desde ahí.
 - El login devuelve un único 401 genérico tanto para "email desconocido" como para "contraseña incorrecta", **y además** ejecuta `passwordService.fakeCompare` en la rama del email desconocido para que el tiempo de respuesta no revele qué cuentas existen.
-- Los esquemas usan `z.strictObject` y rechazan campos no declarados. **De esto depende que el rol no sea autoasignable**: `role` no está en `registerSchema`, así que un `{"role": "ADMIN"}` en el cuerpo se corta con un 422 en vez de llegar al servicio. `CreateUserData` tampoco lo incluye, y el valor lo fija el `@default(USER)` del esquema Prisma. Son tres barreras alineadas: relajar `strictObject` a `z.object` derriba la primera de golpe. Promocionar a ADMIN es hoy una operación manual (Prisma Studio o SQL).
+- Los esquemas usan `z.strictObject` y rechazan campos no declarados. **De esto depende que el rol no sea autoasignable**: ni `role` ni `roleCode` están en `registerSchema`, así que colarlos en el cuerpo da 422 en vez de llegar al servicio. `CreateUserData` tampoco los incluye, y el valor lo fija el `@default("USER")` de la columna escalar. Son tres barreras alineadas: relajar `strictObject` a `z.object` derriba la primera de golpe. Promocionar a ADMIN es hoy una operación manual (Prisma Studio o SQL).
 - `jwt.verify` fija `algorithms: ["HS256"]`; sin eso un atacante puede presentar `alg: "none"` o forzar una confusión de algoritmo.
 - `/register` y `/login` comparten un cupo estricto de rate limit; `/refresh` tiene el suyo, más holgado. Unificarlos haría que los logins fallidos consumieran el presupuesto de renovación y echaran de la sesión a usuarios legítimos.
 

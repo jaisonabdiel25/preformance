@@ -7,6 +7,18 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const container = buildContainer(env);
 const app = buildApp(container);
 
+// Los roles son una tabla, no un enum, asi que nada garantiza a nivel de tipos que
+// los codigos que el codigo da por hechos existan en la BD. Se comprueba ANTES de
+// escuchar: mejor no arrancar que servir peticiones denegando permisos en silencio
+// porque falta una fila.
+try {
+  await container.roleService.assertKnownRolesExist();
+} catch (error) {
+  console.error("[api] catalogo de roles incompleto:", error);
+  await container.shutdown();
+  process.exit(1);
+}
+
 const server = app.listen(env.PORT, () => {
   console.log(`[api] escuchando en http://localhost:${env.PORT} (${env.NODE_ENV})`);
 });

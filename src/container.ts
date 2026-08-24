@@ -1,4 +1,4 @@
-import { rateLimit } from "express-rate-limit";
+﻿import { rateLimit } from "express-rate-limit";
 import type { RequestHandler } from "express";
 
 import { createDatabase, type AppPrismaClient } from "./config/database.js";
@@ -10,12 +10,15 @@ import { AuthMiddleware } from "./middlewares/AuthMiddleware.js";
 import { CountryRepository } from "./repositories/implementations/CountryRepository.js";
 import { HealthRepository } from "./repositories/implementations/HealthRepository.js";
 import { RefreshTokenRepository } from "./repositories/implementations/RefreshTokenRepository.js";
+import { RoleRepository } from "./repositories/implementations/RoleRepository.js";
 import { UserRepository } from "./repositories/implementations/UserRepository.js";
 import { AuthService } from "./services/implementations/AuthService.js";
 import { CountryService } from "./services/implementations/CountryService.js";
 import { HealthService } from "./services/implementations/HealthService.js";
 import { PasswordService } from "./services/implementations/PasswordService.js";
+import { RoleService } from "./services/implementations/RoleService.js";
 import { TokenService } from "./services/implementations/TokenService.js";
+import type { IRoleService } from "./services/interfaces/IRoleService.js";
 import { AuthValidator } from "./validators/AuthValidator.js";
 
 /** Piezas que la capa HTTP necesita del contenedor. */
@@ -31,6 +34,11 @@ export interface Container {
   refreshRateLimiter: RequestHandler;
   countryController: CountryController;
   healthController: HealthController;
+  /**
+   * Comprobacion de integridad del catalogo de roles. La ejecuta `server.ts` antes
+   * de aceptar trafico; no la consume ninguna ruta.
+   */
+  roleService: IRoleService;
   /** Desconecta Prisma y cierra el pool. Lo llama el apagado ordenado del servidor. */
   shutdown(): Promise<void>;
 }
@@ -55,6 +63,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
   const userRepository = new UserRepository(prisma);
   const refreshTokenRepository = new RefreshTokenRepository(prisma);
   const countryRepository = new CountryRepository(prisma);
+  const roleRepository = new RoleRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
 
   // --- Servicios: implementan I*Service, sin dependencias de HTTP -----------
@@ -76,6 +85,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
     tokenService,
   );
   const countryService = new CountryService(countryRepository);
+  const roleService = new RoleService(roleRepository);
   const healthService = new HealthService(healthRepository);
 
   // --- Capa HTTP ------------------------------------------------------------
@@ -122,6 +132,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
     refreshRateLimiter,
     countryController,
     healthController,
+    roleService,
     shutdown: async () => {
       // El orden importa: Prisma primero, para que suelte las conexiones que tenga
       // tomadas del pool antes de que este las cierre.

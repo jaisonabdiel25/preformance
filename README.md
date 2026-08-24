@@ -187,7 +187,7 @@ Base: `/api/v1`
     "id": "uuid",
     "email": "ana@example.com",
     "name": "Ana Torres",
-    "role": "USER",
+    "role": { "code": "USER", "name": "Usuario" },
     "birthDate": "1990-05-14T00:00:00.000Z",
     "country": { "code": "PA", "name": "Panama" },
     "createdAt": "..."
@@ -211,6 +211,20 @@ Base: `/api/v1`
 | `birthDate` | No | `YYYY-MM-DD`, en el pasado, entre 18 y 120 años |
 | `countryCode` | No | ISO 3166-1 alpha-2 (`PA`, `US`, `CO`), normalizado a mayúsculas, debe existir en `countries` |
 | `role` | — | **Rechazado**. Lo fija el servidor con `USER` |
+
+### Roles
+
+`roles` es una tabla, no un enum, para poder añadir roles sin migración y describirlos desde la base de datos. Vienen `USER` y `ADMIN`, **insertados por la propia migración**: un usuario no puede existir sin rol, así que el esquema nunca queda en un estado donde registrarse sea imposible. El seeder los repite con `upsert`, lo que permite reparar una fila borrada sin recurrir a `migrate:reset`.
+
+El precio de la tabla es que `user.role.code` es un `string` para TypeScript: una comparación contra `"ADMNI"` compilaría y denegaría el acceso en silencio. Dos defensas contra eso:
+
+1. **Compara siempre contra `ROLE`** de [src/constants/roles.ts](src/constants/roles.ts), nunca contra literales:
+   ```ts
+   if (user.role.code === ROLE.ADMIN)   // el compilador valida la propiedad
+   ```
+2. **El arranque verifica el catálogo.** `RoleService.assertKnownRolesExist()` corre antes de escuchar y aborta el proceso si falta algún código de `ROLE` en la tabla. Un desajuste entre código y datos revienta el arranque con un mensaje concreto en lugar de manifestarse como un permiso denegado inexplicable.
+
+Promocionar a ADMIN es hoy una operación manual (`npm run db:studio` o SQL). No hay guard `requireRole` todavía.
 
 Todos los errores salen con la misma forma:
 

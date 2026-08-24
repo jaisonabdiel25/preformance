@@ -16,17 +16,25 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Roles de la aplicacion.
+/// Catalogo de roles.
 ///
-/// NO es asignable desde /register: el campo lleva @default(USER) y no forma parte
-/// del DTO de registro, asi que el z.strictObject del validador corta con un 422
-/// cualquier intento de colar "role": "ADMIN" en el cuerpo. Promocionar a ADMIN es
-/// hoy una operacion manual (Prisma Studio o SQL).
-enum Role {
-  USER
-  ADMIN
+/// Es una tabla y no un enum para poder anadir roles sin migracion y describirlos
+/// desde la BD. El precio es que `roleCode` es un `string` para TypeScript: por eso
+/// las comparaciones en codigo deben usar el objeto ROLE de `constants/roles.ts`,
+/// y por eso el arranque verifica que los codigos que el codigo conoce existen de
+/// verdad en esta tabla.
+///
+/// Las filas USER y ADMIN las inserta la propia migracion, no el seeder: un usuario
+/// no puede existir sin rol, asi que el esquema nunca debe quedar en un estado en
+/// el que registrarse sea imposible.
+model Role {
+  code        String  @id @db.VarChar(20)
+  name        String  @db.VarChar(50)
+  description String? @db.VarChar(255)
 
-  @@map("user_role")
+  users User[]
+
+  @@map("roles")
 }
 
 /// Tabla de referencia de paises. Se puebla con `npm run db:seed`.
@@ -53,7 +61,10 @@ model User {
   passwordHash String @map("password_hash") @db.VarChar(255)
   name         String @db.VarChar(100)
 
-  role Role @default(USER)
+  /// El default vive en la columna escalar, no en la relacion. Es lo que impide
+  /// que /register asigne rol: el DTO no lo lleva y aqui siempre sale USER.
+  roleCode String @default("USER") @map("role_code") @db.VarChar(20)
+  role     Role   @relation(fields: [roleCode], references: [code], onDelete: Restrict, onUpdate: Cascade)
 
   /// Solo la fecha, sin hora: una fecha de nacimiento no tiene zona horaria y
   /// guardarla como timestamp la desplaza un dia segun donde se lea.
@@ -71,6 +82,7 @@ model User {
 
   refreshTokens RefreshToken[]
 
+  @@index([roleCode], map: "users_role_code_idx")
   @@index([countryCode], map: "users_country_code_idx")
   @@map("users")
 }

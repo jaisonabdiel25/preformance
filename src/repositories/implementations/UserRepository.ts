@@ -1,14 +1,15 @@
-import type { AppPrismaClient } from "../../config/database.js";
+﻿import type { AppPrismaClient } from "../../config/database.js";
 import { ConflictError, ValidationError } from "../../errors/app-error.js";
 import type { UserCredentialsRow, UserRow } from "../../types/user.types.js";
 import type { CreateUserData, IUserRepository } from "../interfaces/IUserRepository.js";
 import { isForeignKeyConstraintError, isUniqueConstraintError } from "./prisma-error.js";
 
 /**
- * Se incluye siempre el pais porque `toPublicUser` lo necesita para devolver
- * `{ code, name }`. Es una sola consulta con JOIN, no un viaje extra a la BD.
+ * Se incluyen siempre rol y pais porque `toPublicUser` los necesita para devolver
+ * `{ code, name }`. Prisma lo resuelve con JOINs en una sola consulta, no con
+ * viajes extra a la BD.
  */
-const WITH_COUNTRY = { country: true } as const;
+const WITH_RELATIONS = { role: true, country: true } as const;
 
 /**
  * Implementacion Prisma de IUserRepository.
@@ -21,13 +22,13 @@ export class UserRepository implements IUserRepository {
   constructor(private readonly prisma: AppPrismaClient) {}
 
   async findById(id: string): Promise<UserRow | null> {
-    return this.prisma.user.findUnique({ where: { id }, include: WITH_COUNTRY });
+    return this.prisma.user.findUnique({ where: { id }, include: WITH_RELATIONS });
   }
 
   async findCredentialsByEmail(email: string): Promise<UserCredentialsRow | null> {
     return this.prisma.user.findUnique({
       where: { email },
-      include: WITH_COUNTRY,
+      include: WITH_RELATIONS,
       // Unica desactivacion del omit global en todo el proyecto.
       omit: { passwordHash: false },
     });
@@ -55,7 +56,7 @@ export class UserRepository implements IUserRepository {
           birthDate: data.birthDate ?? null,
           countryCode: data.countryCode ?? null,
         },
-        include: WITH_COUNTRY,
+        include: WITH_RELATIONS,
       });
     } catch (error) {
       // Red de seguridad ante la carrera entre existsByEmail() y este INSERT: dos
@@ -66,9 +67,12 @@ export class UserRepository implements IUserRepository {
         throw new ConflictError("Ya existe una cuenta registrada con ese email");
       }
 
-      // countryCode que no esta en la tabla `countries`. Es un dato invalido del
-      // cliente, no un fallo del servidor, asi que sale como 422 sobre el campo.
-      if (isForeignKeyConstraintError(error)) {
+      // Ahora `users` tiene dos claves foraneas, rol y pais, asi que un P2003 no
+      // implica por si solo cual fallo. Solo se traduce a error de campo si el
+      // cliente mando un pais: el rol siempre sale del default 'USER', que la
+      // migracion garantiza que existe, y si aun asi fallara seria un problema de
+      // integridad del servidor y debe salir como 500, no como culpa del cliente.
+      if (isForeignKeyConstraintError(error) && data.countryCode !== undefined) {
         throw new ValidationError({
           countryCode: [
             `El pais "${data.countryCode}" no existe. Consulta GET /api/v1/countries.`,
