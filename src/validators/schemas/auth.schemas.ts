@@ -31,9 +31,60 @@ const passwordField = z
   .regex(/[A-Z]/, "La contrasena debe incluir al menos una letra mayuscula")
   .regex(/\d/, "La contrasena debe incluir al menos un numero");
 
+const MIN_AGE_YEARS = 18;
+const MAX_AGE_YEARS = 120;
+
+/** Edad cumplida a dia de hoy, contando el mes y el dia, no solo el ano. */
+function yearsSince(date: Date): number {
+  const today = new Date();
+  let age = today.getUTCFullYear() - date.getUTCFullYear();
+
+  const monthDiff = today.getUTCMonth() - date.getUTCMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getUTCDate() < date.getUTCDate())) {
+    age -= 1;
+  }
+
+  return age;
+}
+
 /**
- * `strictObject` rechaza cualquier campo no declarado. Sin esto, un cliente podria
- * colar `{"role": "admin"}` y confiar en que ninguna capa posterior lo lea.
+ * Fecha de nacimiento en formato ISO `YYYY-MM-DD`.
+ *
+ * `z.iso.date()` rechaza tanto formatos raros como fechas que no existen
+ * (`1990-02-30`). Despues se transforma a Date en UTC: sin la Z, `new Date()`
+ * interpretaria la cadena en la zona local y en husos negativos la fecha
+ * retrocederia un dia.
+ */
+const birthDateField = z
+  .iso.date("La fecha de nacimiento debe tener el formato YYYY-MM-DD")
+  .transform((value) => new Date(`${value}T00:00:00.000Z`))
+  .refine((date) => date.getTime() <= Date.now(), {
+    message: "La fecha de nacimiento no puede estar en el futuro",
+  })
+  .refine((date) => yearsSince(date) >= MIN_AGE_YEARS, {
+    message: `Debes tener al menos ${MIN_AGE_YEARS} anos`,
+  })
+  .refine((date) => yearsSince(date) <= MAX_AGE_YEARS, {
+    message: "La fecha de nacimiento no es plausible",
+  });
+
+/**
+ * Codigo ISO 3166-1 alpha-2. Se normaliza a mayusculas antes de validar, igual que
+ * el email a minusculas, para que "pa" y "PA" sean el mismo pais.
+ *
+ * Que el codigo EXISTA lo garantiza la clave foranea contra `countries`; aqui solo
+ * se comprueba la forma. Consulta GET /api/v1/countries para la lista valida.
+ */
+const countryCodeField = z
+  .string({ message: "El pais debe ser un codigo ISO de 2 letras" })
+  .trim()
+  .toUpperCase()
+  .regex(/^[A-Z]{2}$/, "El pais debe ser un codigo ISO 3166-1 alpha-2, como PA o CO");
+
+/**
+ * `strictObject` rechaza cualquier campo no declarado. Eso es lo que impide que un
+ * cliente se autoasigne un rol: `role` NO esta aqui, asi que un `{"role": "ADMIN"}`
+ * en el cuerpo se corta con un 422 en lugar de llegar al servicio.
  */
 export const registerSchema = z.strictObject({
   email: emailField,
@@ -43,6 +94,11 @@ export const registerSchema = z.strictObject({
     .trim()
     .min(2, "El nombre debe tener al menos 2 caracteres")
     .max(100, "El nombre no puede superar los 100 caracteres"),
+
+  // Opcionales: se pueden completar despues. `.optional()` acepta que el campo
+  // falte; enviarlo con un valor invalido sigue dando 422.
+  birthDate: birthDateField.optional(),
+  countryCode: countryCodeField.optional(),
 });
 
 /**

@@ -17,8 +17,11 @@ npm run migrate:dev           # tras editar schema.prisma: crea migración, la a
 npm run generate              # regenera el cliente sin tocar la BD
 npm run migrate:status        # qué migraciones están aplicadas
 npm run migrate:reset         # DESTRUCTIVO: borra la BD y reaplica todo
+npm run db:seed               # datos maestros (países). Idempotente, con upsert
 npm run db:studio             # GUI para inspeccionar datos
 ```
+
+**El seed no lo ejecutan las migraciones.** En Prisma 7 hay que lanzarlo aparte; el único comando que lo encadena es `migrate:reset`. Una base migrada pero sin sembrar deja `countries` vacía, y entonces **todo registro con `countryCode` falla con 422** porque la clave foránea no encuentra el país.
 
 **Tras cambiar `prisma/schema.prisma` hay que ejecutar `npm run migrate:dev`** (o al menos `npm run generate`), o el cliente en `src/generated/prisma` se queda viejo y nada compila contra el esquema nuevo. El `postinstall` ejecuta `prisma generate`, así que un clon recién instalado ya arranca.
 
@@ -109,7 +112,7 @@ Son deliberadas y fáciles de romper sin querer:
 - **`omit` global sobre `passwordHash`** en `config/database.ts`: Prisma devuelve el modelo completo por defecto, así que sin esto el hash viajaría en cada consulta. El único sitio que lo desactiva es `UserRepository.findCredentialsByEmail`, que se llama así —y no `findByEmail`— precisamente para que sea visible en cualquier auditoría. Su tipo de retorno es `UserCredentialsRow`, que no debe salir de `AuthService`.
 - `toPublicUser()` construye la respuesta campo a campo, de modo que un campo nuevo del modelo no puede escaparse solo. Además acepta `UserRow`, que ya no tiene `passwordHash`, así que el hash ni siquiera es visible desde ahí.
 - El login devuelve un único 401 genérico tanto para "email desconocido" como para "contraseña incorrecta", **y además** ejecuta `passwordService.fakeCompare` en la rama del email desconocido para que el tiempo de respuesta no revele qué cuentas existen.
-- Los esquemas usan `z.strictObject` y rechazan campos no declarados (un `role: "admin"` colado se corta en la validación).
+- Los esquemas usan `z.strictObject` y rechazan campos no declarados. **De esto depende que el rol no sea autoasignable**: `role` no está en `registerSchema`, así que un `{"role": "ADMIN"}` en el cuerpo se corta con un 422 en vez de llegar al servicio. `CreateUserData` tampoco lo incluye, y el valor lo fija el `@default(USER)` del esquema Prisma. Son tres barreras alineadas: relajar `strictObject` a `z.object` derriba la primera de golpe. Promocionar a ADMIN es hoy una operación manual (Prisma Studio o SQL).
 - `jwt.verify` fija `algorithms: ["HS256"]`; sin eso un atacante puede presentar `alg: "none"` o forzar una confusión de algoritmo.
 - `/register` y `/login` comparten un cupo estricto de rate limit; `/refresh` tiene el suyo, más holgado. Unificarlos haría que los logins fallidos consumieran el presupuesto de renovación y echaran de la sesión a usuarios legítimos.
 

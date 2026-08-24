@@ -13,6 +13,7 @@ cp .env.example .env          # PowerShell: Copy-Item .env.example .env
 npm install
 docker compose up -d --wait   # levanta la BD y espera a que esté lista
 npm run migrate:up            # aplica el esquema (prisma migrate deploy)
+npm run db:seed               # puebla la tabla de países (PA, US, CO)
 npm run dev                   # API en http://localhost:3000
 ```
 
@@ -174,6 +175,7 @@ Base: `/api/v1`
 | `POST` | `/api/v1/auth/refresh` | — | Canjea el refresh token por un par nuevo (lo rota) |
 | `POST` | `/api/v1/auth/logout` | — | Revoca el refresh token. `204` |
 | `GET` | `/api/v1/auth/me` | Bearer | Perfil del usuario autenticado |
+| `GET` | `/api/v1/countries` | — | Catálogo de países. Público: el formulario de registro lo necesita antes de que exista ningún usuario |
 
 ### Formato de respuesta
 
@@ -181,13 +183,34 @@ Base: `/api/v1`
 
 ```json
 {
-  "user": { "id": "uuid", "email": "ana@example.com", "name": "Ana Torres", "createdAt": "..." },
+  "user": {
+    "id": "uuid",
+    "email": "ana@example.com",
+    "name": "Ana Torres",
+    "role": "USER",
+    "birthDate": "1990-05-14T00:00:00.000Z",
+    "country": { "code": "PA", "name": "Panama" },
+    "createdAt": "..."
+  },
   "accessToken": "eyJ...",
   "refreshToken": "a1b2c3...",
   "expiresIn": 900,
   "tokenType": "Bearer"
 }
 ```
+
+`birthDate` y `country` son `null` mientras el usuario no los facilite. En `/register` ambos son **opcionales**; `role` **no se acepta** en el cuerpo.
+
+### Campos del registro
+
+| Campo | Obligatorio | Reglas |
+|---|---|---|
+| `email` | Sí | Formato válido, normalizado a minúsculas, máx. 255 |
+| `password` | Sí | 8–72, con minúscula, mayúscula y dígito |
+| `name` | Sí | 2–100, recortado |
+| `birthDate` | No | `YYYY-MM-DD`, en el pasado, entre 18 y 120 años |
+| `countryCode` | No | ISO 3166-1 alpha-2 (`PA`, `US`, `CO`), normalizado a mayúsculas, debe existir en `countries` |
+| `role` | — | **Rechazado**. Lo fija el servidor con `USER` |
 
 Todos los errores salen con la misma forma:
 
@@ -248,6 +271,7 @@ Vale la pena conocer las que no son obvias al leer el código:
 | `npm run migrate:status` | Qué migraciones están aplicadas |
 | `npm run migrate:reset` | **Destructivo**: borra la BD y reaplica el historial |
 | `npm run generate` | Regenera el cliente sin tocar la base de datos |
+| `npm run db:seed` | Puebla los datos maestros (países). Idempotente, usa `upsert` |
 | `npm run db:studio` | Abre Prisma Studio, un GUI para inspeccionar los datos |
 
 > **No hay migraciones `down`.** Prisma no las soporta: en desarrollo se deshace con `migrate:reset`, y en producción revertir significa escribir una migración nueva que deshaga la anterior.

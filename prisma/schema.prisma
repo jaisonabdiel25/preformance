@@ -16,6 +16,32 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Roles de la aplicacion.
+///
+/// NO es asignable desde /register: el campo lleva @default(USER) y no forma parte
+/// del DTO de registro, asi que el z.strictObject del validador corta con un 422
+/// cualquier intento de colar "role": "ADMIN" en el cuerpo. Promocionar a ADMIN es
+/// hoy una operacion manual (Prisma Studio o SQL).
+enum Role {
+  USER
+  ADMIN
+
+  @@map("user_role")
+}
+
+/// Tabla de referencia de paises. Se puebla con `npm run db:seed`.
+model Country {
+  /// ISO 3166-1 alpha-2 como clave primaria. Es un identificador estandar y estable,
+  /// asi que un usuario ya lleva el codigo encima sin necesidad de join; la union
+  /// con esta tabla solo hace falta para obtener el nombre.
+  code String @id @db.Char(2)
+  name String @db.VarChar(100)
+
+  users User[]
+
+  @@map("countries")
+}
+
 model User {
   // dbgenerated en vez de uuid(): el UUID lo pone PostgreSQL con gen_random_uuid(),
   // no el cliente, de modo que un INSERT hecho por fuera de Prisma tambien lo obtiene.
@@ -27,6 +53,17 @@ model User {
   passwordHash String @map("password_hash") @db.VarChar(255)
   name         String @db.VarChar(100)
 
+  role Role @default(USER)
+
+  /// Solo la fecha, sin hora: una fecha de nacimiento no tiene zona horaria y
+  /// guardarla como timestamp la desplaza un dia segun donde se lea.
+  birthDate DateTime? @map("birth_date") @db.Date
+
+  countryCode String?  @map("country_code") @db.Char(2)
+  /// Restrict y no SetNull: borrar un pais que alguien esta usando debe fallar,
+  /// no vaciar en silencio el dato de esos usuarios.
+  country     Country? @relation(fields: [countryCode], references: [code], onDelete: Restrict, onUpdate: Cascade)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   // @updatedAt lo gestiona Prisma en el cliente. Sustituye al trigger set_updated_at
   // que habia antes en la BD: una escritura por fuera de Prisma ya no lo actualiza.
@@ -34,6 +71,7 @@ model User {
 
   refreshTokens RefreshToken[]
 
+  @@index([countryCode], map: "users_country_code_idx")
   @@map("users")
 }
 

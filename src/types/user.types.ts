@@ -1,4 +1,12 @@
-import type { RefreshToken, User } from "../generated/prisma/client.js";
+import type { Country, RefreshToken, Role, User } from "../generated/prisma/client.js";
+
+export type { Country, Role };
+
+/** El pais tal y como se publica: solo lo que un cliente necesita para mostrarlo. */
+export interface PublicCountry {
+  code: string;
+  name: string;
+}
 
 /**
  * Los tipos de fila ya NO se escriben a mano: se derivan del cliente que Prisma
@@ -11,14 +19,14 @@ import type { RefreshToken, User } from "../generated/prisma/client.js";
  * la contrasena, porque el cliente lleva `omit: { user: { passwordHash: true } }`
  * configurado globalmente en `config/database.ts`.
  */
-export type UserRow = Omit<User, "passwordHash">;
+export type UserRow = Omit<User, "passwordHash"> & { country: Country | null };
 
 /**
  * Usuario CON el hash de la contrasena. Solo lo produce
  * `IUserRepository.findCredentialsByEmail`, que desactiva el omit a proposito.
  * Este tipo no debe salir nunca de AuthService.
  */
-export type UserCredentialsRow = User;
+export type UserCredentialsRow = User & { country: Country | null };
 
 /** Fila de `refresh_tokens`. */
 export type RefreshTokenRow = RefreshToken;
@@ -28,6 +36,11 @@ export interface PublicUser {
   id: string;
   email: string;
   name: string;
+  role: Role;
+  /** null mientras el usuario no la haya facilitado. */
+  birthDate: Date | null;
+  /** null mientras el usuario no haya elegido pais. */
+  country: PublicCountry | null;
   createdAt: Date;
 }
 

@@ -7,6 +7,9 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    // En Prisma 7 el seed NO se ejecuta solo al migrar: hay que lanzar
+    // `npm run db:seed` (o `prisma migrate reset`, que si lo encadena).
+    seed: "tsx prisma/seed.ts",
   },
   datasource: {
     url: process.env["DATABASE_URL"],

@@ -4,12 +4,15 @@ import type { RequestHandler } from "express";
 import { createDatabase, type AppPrismaClient } from "./config/database.js";
 import { env as defaultEnv, type Env } from "./config/env.js";
 import { AuthController } from "./controllers/AuthController.js";
+import { CountryController } from "./controllers/CountryController.js";
 import { HealthController } from "./controllers/HealthController.js";
 import { AuthMiddleware } from "./middlewares/AuthMiddleware.js";
+import { CountryRepository } from "./repositories/implementations/CountryRepository.js";
 import { HealthRepository } from "./repositories/implementations/HealthRepository.js";
 import { RefreshTokenRepository } from "./repositories/implementations/RefreshTokenRepository.js";
 import { UserRepository } from "./repositories/implementations/UserRepository.js";
 import { AuthService } from "./services/implementations/AuthService.js";
+import { CountryService } from "./services/implementations/CountryService.js";
 import { HealthService } from "./services/implementations/HealthService.js";
 import { PasswordService } from "./services/implementations/PasswordService.js";
 import { TokenService } from "./services/implementations/TokenService.js";
@@ -26,6 +29,7 @@ export interface Container {
   authRateLimiter: RequestHandler;
   /** Cupo holgado para /refresh, que los clientes llaman de forma rutinaria. */
   refreshRateLimiter: RequestHandler;
+  countryController: CountryController;
   healthController: HealthController;
   /** Desconecta Prisma y cierra el pool. Lo llama el apagado ordenado del servidor. */
   shutdown(): Promise<void>;
@@ -50,6 +54,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
   // --- Repositorios: implementan I*Repository, unica capa que conoce Prisma --
   const userRepository = new UserRepository(prisma);
   const refreshTokenRepository = new RefreshTokenRepository(prisma);
+  const countryRepository = new CountryRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
 
   // --- Servicios: implementan I*Service, sin dependencias de HTTP -----------
@@ -70,10 +75,12 @@ export function buildContainer(env: Env = defaultEnv): Container {
     passwordService,
     tokenService,
   );
+  const countryService = new CountryService(countryRepository);
   const healthService = new HealthService(healthRepository);
 
   // --- Capa HTTP ------------------------------------------------------------
   const authController = new AuthController(authService);
+  const countryController = new CountryController(countryService);
   const healthController = new HealthController(healthService);
   const authValidator = new AuthValidator();
   const authMiddleware = new AuthMiddleware(tokenService);
@@ -113,6 +120,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
     authMiddleware,
     authRateLimiter,
     refreshRateLimiter,
+    countryController,
     healthController,
     shutdown: async () => {
       // El orden importa: Prisma primero, para que suelte las conexiones que tenga

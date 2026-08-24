@@ -19,6 +19,7 @@
     "migrate:create": "prisma migrate dev --create-only",
     "migrate:status": "prisma migrate status",
     "migrate:reset": "prisma migrate reset",
+    "db:seed": "prisma db seed",
     "db:studio": "prisma studio"
   },
   "keywords": [],

@@ -17,7 +17,15 @@
 GET {{host}}/health
 
 ###############################################################################
+# 1b. Catalogo de paises (publico, para poblar un desplegable en el registro)
+###############################################################################
+
+GET {{baseUrl}}/countries
+
+###############################################################################
 # 2. Registro - camino feliz -> 201
+#    birthDate y countryCode son OPCIONALES; role NO se acepta (lo pone el
+#    servidor con USER).
 ###############################################################################
 
 # @name register
@@ -27,7 +35,65 @@ Content-Type: application/json
 {
   "email": "{{email}}",
   "password": "{{password}}",
-  "name": "Ana Torres"
+  "name": "Ana Torres",
+  "birthDate": "1990-05-14",
+  "countryCode": "PA"
+}
+
+###############################################################################
+# 2b. Registro minimo, sin los campos opcionales -> 201 con birthDate y
+#     country a null
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "minimo@example.com",
+  "password": "{{password}}",
+  "name": "Sin Datos"
+}
+
+###############################################################################
+# 2c. SEGURIDAD: intentar autoasignarse el rol -> 422 (lo corta strictObject)
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "intruso-rol@example.com",
+  "password": "{{password}}",
+  "name": "Intruso",
+  "role": "ADMIN"
+}
+
+###############################################################################
+# 2d. Menor de 18 -> 422
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "menor@example.com",
+  "password": "{{password}}",
+  "name": "Menor Edad",
+  "birthDate": "2015-01-01"
+}
+
+###############################################################################
+# 2e. Pais que no esta en el catalogo -> 422 sobre countryCode
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "pais-falso@example.com",
+  "password": "{{password}}",
+  "name": "Pais Falso",
+  "countryCode": "XX"
 }
 
 ###############################################################################

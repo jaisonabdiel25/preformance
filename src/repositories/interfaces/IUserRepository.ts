@@ -5,6 +5,16 @@ export interface CreateUserData {
   email: string;
   passwordHash: string;
   name: string;
+  /** Opcional: se puede completar despues del alta. */
+  birthDate?: Date | undefined;
+  /**
+   * Codigo ISO 3166-1 alpha-2 en mayusculas. Debe existir en `countries`; si no,
+   * la implementacion lanza ValidationError sobre este campo.
+   *
+   * `role` NO esta aqui a proposito: lo fija el @default(USER) del esquema, de modo
+   * que ningun camino de creacion de usuarios puede asignar un rol.
+   */
+  countryCode?: string | undefined;
 }
 
 /**

@@ -11,6 +11,9 @@ import { Prisma } from "../../generated/prisma/client.js";
 /** P2002: fallo de restriccion unica. */
 const UNIQUE_CONSTRAINT_FAILED = "P2002";
 
+/** P2003: fallo de clave foranea (se referencia una fila que no existe). */
+const FOREIGN_KEY_CONSTRAINT_FAILED = "P2003";
+
 /**
  * Detecta una violacion de unicidad, opcionalmente sobre un campo concreto.
  *
@@ -27,4 +30,18 @@ export function isUniqueConstraintError(error: unknown, field?: string): boolean
 
   const target = error.meta?.["target"];
   return Array.isArray(target) && target.includes(field);
+}
+
+/**
+ * Detecta que se ha intentado referenciar una fila inexistente.
+ *
+ * Ocurre, por ejemplo, al registrar un usuario con un `countryCode` que no esta en
+ * la tabla `countries`. Se traduce a un error de validacion para que el cliente
+ * reciba un 422 explicando el campo, en vez de un 500 opaco.
+ */
+export function isForeignKeyConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === FOREIGN_KEY_CONSTRAINT_FAILED
+  );
 }

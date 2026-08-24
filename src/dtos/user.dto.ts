@@ -16,6 +16,10 @@ export function toPublicUser(row: UserRow): PublicUser {
     id: row.id,
     email: row.email,
     name: row.name,
+    role: row.role,
+    birthDate: row.birthDate,
+    // Se aplana a { code, name }: el cliente no necesita la fila entera de countries.
+    country: row.country ? { code: row.country.code, name: row.country.name } : null,
     createdAt: row.createdAt,
   };
 }

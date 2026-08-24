@@ -47,6 +47,8 @@ export class AuthService implements IAuthService {
       email,
       passwordHash,
       name: dto.name.trim(),
+      birthDate: dto.birthDate,
+      countryCode: dto.countryCode,
     });
 
     return {
