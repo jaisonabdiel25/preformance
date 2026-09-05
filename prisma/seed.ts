@@ -4,74 +4,40 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 
 import { PrismaClient } from "../src/generated/prisma/client.js";
+import { seedAdmin } from "./seeds/admin.js";
+import { seedCountries } from "./seeds/countries.js";
+import { seedRoles } from "./seeds/roles.js";
 
 /**
- * Datos de referencia del proyecto.
+ * Orquestador del seed: abre la conexion, encadena los sembradores de `seeds/` en el
+ * orden correcto y la cierra. La logica de cada conjunto de datos vive en su propio
+ * modulo, asi que anadir uno nuevo son dos lineas aqui y un archivo alla.
  *
- * Se ejecuta con `npm run db:seed`. En Prisma 7 las migraciones NO lo lanzan solas;
- * el unico comando que lo encadena es `prisma migrate reset`.
+ * Se ejecuta con `npm run db:seed`, y solo asi: en Prisma 7 ningun comando de
+ * migracion lo lanza, `prisma migrate reset` incluido. El script `migrate:reset` del
+ * package.json lo encadena de forma explicita por ese motivo.
  *
- * Es idempotente: usa `upsert`, asi que correrlo dos veces no duplica ni pisa nada.
+ * Es idempotente: los catalogos usan `upsert`, asi que correrlo dos veces no duplica
+ * ni pisa nada. El administrador inicial es la excepcion matizada, ver `seeds/admin.ts`.
+ *
+ * El cliente se crea aqui a mano en vez de reutilizar `createDatabase`: esa fabrica
+ * pide un `Env` completo, y `config/env.ts` exige JWT_ACCESS_SECRET y compania, que el
+ * seed no usa y que no tienen por que existir al sembrar una base remota desde una
+ * maquina de desarrollo.
  */
-
-/**
- * Roles. Se insertan tambien en la migracion `roles_table`, porque un usuario no
- * puede existir sin rol y un despliegue recien migrado debe poder registrar gente
- * sin depender de que alguien lance el seed.
- *
- * Estan aqui ADEMAS para poder repararlos: si alguien borra o edita una fila, este
- * seed la restaura sin necesidad de un `migrate:reset`, que borraria la base entera.
- * Los codigos deben coincidir con `src/constants/roles.ts`, y el arranque de la API
- * lo verifica.
- */
-const ROLES = [
-  {
-    code: "USER",
-    name: "Usuario",
-    description: "Acceso a sus propios datos. Rol por defecto al registrarse.",
-  },
-  {
-    code: "ADMIN",
-    name: "Administrador",
-    description: "Acceso completo, incluida la gestion de otros usuarios.",
-  },
-] as const;
-
-/** ISO 3166-1 alpha-2. Anadir un pais aqui y volver a ejecutar el seed. */
-const COUNTRIES = [
-  { code: "PA", name: "Panama" },
-  { code: "US", name: "Estados Unidos" },
-  { code: "CO", name: "Colombia" },
-] as const;
-
 async function main(): Promise<void> {
   const pool = new pg.Pool({ connectionString: process.env["DATABASE_URL"] });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
   try {
-    for (const role of ROLES) {
-      await prisma.role.upsert({
-        where: { code: role.code },
-        update: { name: role.name, description: role.description },
-        create: role,
-      });
-    }
+    // El orden no es decorativo: `users.role_code` es clave foranea de `roles`, asi
+    // que el administrador no puede sembrarse antes que su rol.
+    const roles = await seedRoles(prisma);
+    const countries = await seedCountries(prisma);
+    const admin = await seedAdmin(prisma);
 
-    for (const country of COUNTRIES) {
-      await prisma.country.upsert({
-        where: { code: country.code },
-        // `update` con el nombre: si se corrige una errata en la lista de arriba,
-        // volver a sembrar la propaga en lugar de ignorarla.
-        update: { name: country.name },
-        create: country,
-      });
-    }
-
-    const [roles, countries] = await Promise.all([
-      prisma.role.count(),
-      prisma.country.count(),
-    ]);
     console.log(`[seed] roles: ${roles} | paises: ${countries}`);
+    console.log(`[seed] admin: ${admin}`);
   } finally {
     await prisma.$disconnect();
     await pool.end();

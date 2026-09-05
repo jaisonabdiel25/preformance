@@ -50,15 +50,32 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 FROM base AS runtime
 
-# --ignore-scripts otra vez: aqui no hay esquema ni CLI, y el postinstall fallaria.
+# OpenSSL no viene en la imagen slim y Prisma lo necesita para detectar la version de
+# libssl y elegir el binario correcto del motor de migraciones. Sin el avisa de que no
+# puede detectarla y cae a un binario por defecto que puede no funcionar.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# --ignore-scripts otra vez: el postinstall lanza `prisma generate` y a esta altura el
+# esquema todavia no se ha copiado. Tampoco haria falta, porque el cliente ya viaja
+# compilado dentro de dist/.
+#
+# Pero saltarse TODOS los scripts se salta tambien el postinstall de @prisma/engines,
+# que es quien descarga el binario schema-engine. Sin el, `prisma migrate deploy` trata
+# de bajarlo en tiempo de ejecucion y falla: el contenedor corre como `node` y
+# node_modules pertenece a root. El `npm rebuild` lo trae aqui, todavia como root.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm rebuild @prisma/engines && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
 
-# Las migraciones no se aplican al arrancar el contenedor: son un paso de despliegue
-# aparte (`npx prisma migrate deploy`). Se copian para poder ejecutarlas desde esta
-# misma imagen si hiciera falta.
+# Las migraciones NO se aplican al arrancar el contenedor: son un paso de despliegue
+# aparte que corre sobre esta misma imagen (`npx prisma migrate deploy`; en Railway,
+# el preDeployCommand de railway.json). Por eso `prisma` es dependencia de produccion
+# y no de desarrollo.
+#
+# Hacen falta los dos COPY: el `datasource` del esquema no declara `url`, asi que la
+# cadena de conexion solo existe en prisma.config.ts. Es TypeScript, pero el CLI lo
+# carga con jiti (via @prisma/config -> c12) sin necesitar tsx.
 COPY prisma ./prisma
 COPY prisma.config.ts ./
 

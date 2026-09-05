@@ -248,7 +248,7 @@ El precio de la tabla es que `user.role.code` es un `string` para TypeScript: un
    ```
 2. **El arranque verifica el catálogo.** `RoleService.assertKnownRolesExist()` corre antes de escuchar y aborta el proceso si falta algún código de `ROLE` en la tabla. Un desajuste entre código y datos revienta el arranque con un mensaje concreto en lugar de manifestarse como un permiso denegado inexplicable.
 
-Promocionar a ADMIN es hoy una operación manual (`npm run db:studio` o SQL). No hay guard `requireRole` todavía.
+Para tener un ADMIN se usa el seed: define `SEED_ADMIN_EMAIL` y `SEED_ADMIN_PASSWORD` en el `.env` y lanza `npm run db:seed`. **Crea como mucho uno**: si ya existe cualquier usuario ADMIN no hace nada, ni siquiera al cambiar `SEED_ADMIN_EMAIL`. Y si no hay ninguno pero el email ya está registrado, lo promociona sin tocar su contraseña. No hay guard `requireRole` todavía.
 
 ### Tareas
 
@@ -318,12 +318,14 @@ Vale la pena conocer las que no son obvias al leer el código:
 | `npm run migrate:up` | Aplica las migraciones pendientes (`prisma migrate deploy`, para producción) |
 | `npm run migrate:create` | Genera la migración **sin aplicarla**, para editar el SQL a mano antes (índices parciales, triggers y demás que el esquema no sabe expresar) |
 | `npm run migrate:status` | Qué migraciones están aplicadas |
-| `npm run migrate:reset` | **Destructivo**: borra la BD y reaplica el historial |
+| `npm run migrate:reset` | **Destructivo**: borra la BD, reaplica el historial y vuelve a sembrar |
 | `npm run generate` | Regenera el cliente sin tocar la base de datos |
-| `npm run db:seed` | Puebla los datos maestros (países). Idempotente, usa `upsert` |
+| `npm run db:seed` | Puebla los datos maestros (países) y, si `SEED_ADMIN_EMAIL` está definido, crea el administrador. Idempotente |
 | `npm run db:studio` | Abre Prisma Studio, un GUI para inspeccionar los datos |
 
 > **No hay migraciones `down`.** Prisma no las soporta: en desarrollo se deshace con `migrate:reset`, y en producción revertir significa escribir una migración nueva que deshaga la anterior.
+
+> **El seed no se ejecuta solo.** En Prisma 7, `prisma db seed` es el único comando que siembra: ningún comando de migración lo encadena, `migrate reset` incluido. Por eso `migrate:reset` lo invoca de forma explícita en el `package.json`. Tras aplicar migraciones sobre una base nueva con `migrate:up`, lanza `npm run db:seed` tú.
 
 ---
 
@@ -359,11 +361,37 @@ docker run --rm -p 3000:3000 --env-file .env preformance-api:prod
 
 Multi-stage: `deps` → `build` (genera el cliente Prisma y compila con `tsc`) → `runtime`. La imagen final lleva únicamente `dist/` y las dependencias de producción, y corre como usuario `node`.
 
-Detalle de Prisma que conviene conocer: el cliente se genera dentro de `src/generated/prisma`, así que `tsc` lo compila a `dist/` con el resto del código. Por eso el runtime no necesita la CLI de Prisma ni copiar `node_modules/.prisma`. Los `npm ci` usan `--ignore-scripts` para que el `postinstall` no intente generar antes de que exista el esquema.
+Detalle de Prisma que conviene conocer: el cliente se genera dentro de `src/generated/prisma`, así que `tsc` lo compila a `dist/` con el resto del código. Por eso el runtime no necesita *generar* nada. Sí lleva la CLI de Prisma —`prisma` es dependencia de producción, no de desarrollo— porque las migraciones se aplican desde esta misma imagen como paso de despliegue.
 
-Al arrancar verás un aviso de Prisma sobre no detectar la versión de OpenSSL. Es inocuo aquí: con el driver adapter de `pg`, las conexiones las hace `pg`, no el motor Rust.
+Los `npm ci` usan `--ignore-scripts` para que el `postinstall` no intente generar antes de que exista el esquema. Eso se salta también el `postinstall` de `@prisma/engines`, que es quien descarga el binario `schema-engine`; el runtime lo recupera con un `npm rebuild @prisma/engines` explícito, todavía como `root`. Sin ese paso, `prisma migrate deploy` intentaría descargarlo en tiempo de ejecución y fallaría, porque el contenedor corre como `node` y `node_modules` pertenece a `root`.
+
+La etapa `runtime` instala `openssl`: la imagen slim no lo trae y Prisma lo necesita para detectar la versión de libssl y elegir el binario correcto del motor de migraciones.
 
 Si lo pruebas en local contra la BD del compose, `DATABASE_URL` debe apuntar a `host.docker.internal:5441` en lugar de `localhost:5441`: dentro del contenedor, `localhost` es el propio contenedor. En el despliegue real apuntará a tu base de datos gestionada. Y recuerda ejecutar `npm run migrate:up` (`prisma migrate deploy`) como paso de despliegue, antes de arrancar la nueva versión: el contenedor **no** aplica migraciones al arrancar.
+
+### Railway
+
+[`railway.json`](railway.json) lleva la configuración del despliegue en el repo en vez de en el panel: constructor `DOCKERFILE`, healthcheck contra `/health` y, sobre todo, el **pre-deploy**.
+
+Ese `preDeployCommand` no es opcional. `server.ts` verifica el catálogo de roles antes de escuchar y hace `process.exit(1)` si falta alguno, así que una base sin migrar deja la API en un ciclo de reinicios. El pre-deploy corre `prisma migrate deploy` sobre la imagen ya construida, antes de levantar el contenedor nuevo y sin cortar el tráfico al viejo; si falla, el despliegue se aborta y la versión anterior sigue sirviendo.
+
+Variables a configurar en el servicio (el resto tiene valores por defecto en `config/env.ts`, y `PORT` lo inyecta Railway):
+
+```
+DATABASE_URL      = ${{Postgres.DATABASE_URL}}   # referencia al servicio, no pegar a mano
+JWT_ACCESS_SECRET = <32+ caracteres>
+CORS_ORIGIN       = https://tu-front.com         # no dejar en "*"
+```
+
+**El seed hay que lanzarlo a mano, una vez.** No es una limitación de la imagen: en Prisma 7 el seed nunca es automático. Y desde el contenedor tampoco puede correr, porque `prisma.config.ts` lo ejecuta con `tsx`, que es dependencia de desarrollo. Desde tu máquina, contra la URL pública:
+
+```bash
+DATABASE_URL="<DATABASE_PUBLIC_URL>?sslmode=require" npm run db:seed
+```
+
+Es idempotente (`upsert`), así que repetirlo no rompe nada. Sin él, `countries` queda vacía y **todo registro con `countryCode` responde 422** por la clave foránea. Los roles no dependen del seed: los inserta su propia migración.
+
+Dos avisos. El `postgres.railway.internal` de la red privada sólo resuelve por IPv6: si al arrancar ves `ENOTFOUND`, prueba con `DATABASE_PUBLIC_URL` y `?sslmode=require` para aislar el problema. Y `DB_POOL_MAX` vale 10 por defecto, que se multiplica por réplica; con dos o más, bájalo.
 
 ---
 

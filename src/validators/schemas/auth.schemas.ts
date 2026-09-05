@@ -4,6 +4,11 @@ import { z } from "zod";
  * Esquemas Zod puros, sin dependencias de Express. Se mantienen separados de las
  * clases validadoras para poder reutilizarlos desde un job, un seed o un test sin
  * arrastrar la capa HTTP.
+ *
+ * `emailField` y `passwordField` se exportan por eso mismo: `prisma/seed.ts` valida
+ * con ellos las credenciales del administrador inicial, de modo que una clave que el
+ * seed acepta es exactamente una que /register aceptaria. El email ademas llega ya
+ * normalizado a minusculas, que es como AuthService lo busca al hacer login.
  */
 
 /**
@@ -11,7 +16,7 @@ import { z } from "zod";
  * de una cadena Zod se aplican en el orden en que se encadenan, asi que normalizar
  * despues de validar dejaria pasar "  Ana@Mail.com  " sin limpiar.
  */
-const emailField = z
+export const emailField = z
   .string({ message: "El email es obligatorio" })
   .trim()
   .toLowerCase()
@@ -23,7 +28,7 @@ const emailField = z
  * contrasena y trunca el resto en silencio. Mejor rechazarla que aceptar una clave
  * larga cuya cola es decorativa.
  */
-const passwordField = z
+export const passwordField = z
   .string({ message: "La contrasena es obligatoria" })
   .min(8, "La contrasena debe tener al menos 8 caracteres")
   .max(72, "La contrasena no puede superar los 72 caracteres")
