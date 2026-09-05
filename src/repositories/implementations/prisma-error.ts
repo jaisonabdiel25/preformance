@@ -14,6 +14,9 @@ const UNIQUE_CONSTRAINT_FAILED = "P2002";
 /** P2003: fallo de clave foranea (se referencia una fila que no existe). */
 const FOREIGN_KEY_CONSTRAINT_FAILED = "P2003";
 
+/** P2025: la operacion no encontro la fila sobre la que iba a actuar. */
+const RECORD_NOT_FOUND = "P2025";
+
 /**
  * Detecta una violacion de unicidad, opcionalmente sobre un campo concreto.
  *
@@ -43,5 +46,20 @@ export function isForeignKeyConstraintError(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
     error.code === FOREIGN_KEY_CONSTRAINT_FAILED
+  );
+}
+
+/**
+ * Detecta que un `update` o un `delete` no encontro la fila indicada.
+ *
+ * A diferencia de sus variantes `*Many`, que devuelven un contador, `update` y
+ * `delete` lanzan cuando el `where` no casa con nada. Un repositorio que filtra por
+ * `{ id, userId }` lo traduce a "no existe o no es tuyo", que para el llamante es el
+ * mismo caso a proposito.
+ */
+export function isRecordNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === RECORD_NOT_FOUND
   );
 }

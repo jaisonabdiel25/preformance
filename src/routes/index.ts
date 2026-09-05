@@ -3,6 +3,7 @@ import { Router } from "express";
 import type { Container } from "../container.js";
 import { buildAuthRoutes } from "./auth.routes.js";
 import { buildCountryRoutes } from "./country.routes.js";
+import { buildTodoRoutes } from "./todo.routes.js";
 
 /**
  * Router raiz de la API versionada (/api/v1).
@@ -25,6 +26,15 @@ export function buildApiRoutes(container: Container): Router {
   );
 
   router.use("/countries", buildCountryRoutes(container.countryController));
+
+  router.use(
+    "/todos",
+    buildTodoRoutes({
+      todoController: container.todoController,
+      todoValidator: container.todoValidator,
+      authMiddleware: container.authMiddleware,
+    }),
+  );
 
   return router;
 }

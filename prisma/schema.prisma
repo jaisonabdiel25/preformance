@@ -81,6 +81,7 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   refreshTokens RefreshToken[]
+  todos         Todo[]
 
   @@index([roleCode], map: "users_role_code_idx")
   @@index([countryCode], map: "users_country_code_idx")
@@ -105,4 +106,32 @@ model RefreshToken {
 
   @@index([userId], map: "refresh_tokens_user_id_idx")
   @@map("refresh_tokens")
+}
+
+/// Tareas de un usuario.
+///
+/// Es el primer recurso del proyecto que PERTENECE a alguien, y de ahi sale su unica
+/// regla dura: `user_id` no es un dato mas de la fila, es el ambito de toda consulta.
+/// Ningun metodo de ITodoRepository acepta un id sin su userId al lado, asi que la
+/// comprobacion de propiedad no se puede olvidar: esta en la firma.
+model Todo {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  title       String  @db.VarChar(200)
+  description String? @db.Text
+  completed   Boolean @default(false)
+
+  userId String @map("user_id") @db.Uuid
+  /// Cascade y no Restrict, al reves que `users.country_code`: una tarea no tiene
+  /// sentido sin su dueno, asi que borrar la cuenta debe llevarselas por delante.
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  /// Compuesto y no suelto sobre user_id: resuelve el listado (filtrar por usuario y
+  /// ordenar por fecha) sin ordenacion en memoria, y al ser user_id el prefijo
+  /// izquierdo sirve igual de bien al borrado en cascada.
+  @@index([userId, createdAt], map: "todos_user_id_created_at_idx")
+  @@map("todos")
 }

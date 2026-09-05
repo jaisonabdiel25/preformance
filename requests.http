@@ -272,3 +272,209 @@ POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
 { "email": "roto@example.com",
+
+###############################################################################
+# 19. TAREAS - crear -> 201. Guarda el id para los bloques siguientes.
+#     Requiere haber ejecutado el bloque 7 (login) para tener @accessToken.
+###############################################################################
+
+# @name createTodo
+POST {{baseUrl}}/todos
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": "Comprar pan",
+  "description": "Integral, de la panaderia de la esquina"
+}
+
+@todoId = {{createTodo.response.body.todo.id}}
+
+###############################################################################
+# 19b. Crear sin token -> 401
+###############################################################################
+
+POST {{baseUrl}}/todos
+Content-Type: application/json
+
+{
+  "title": "Tarea anonima"
+}
+
+###############################################################################
+# 19c. SEGURIDAD: crear una tarea a nombre de otro -> 422
+#      `userId` no esta en createTodoSchema y strictObject lo rechaza.
+###############################################################################
+
+POST {{baseUrl}}/todos
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": "Tarea inyectada",
+  "userId": "00000000-0000-4000-8000-000000000000"
+}
+
+###############################################################################
+# 19d. Titulo vacio al crear -> 422 "El titulo es obligatorio"
+###############################################################################
+
+POST {{baseUrl}}/todos
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": ""
+}
+
+###############################################################################
+# 19e. Titulo de solo espacios al crear -> 422 tambien.
+#      El .trim() corre ANTES del .min(1), asi que "   " queda en "" y falla.
+###############################################################################
+
+POST {{baseUrl}}/todos
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": "   "
+}
+
+###############################################################################
+# 20. Listar MIS tareas -> 200. Nunca aparecen las de otro usuario:
+#     el userId sale del token, no de la URL.
+###############################################################################
+
+GET {{baseUrl}}/todos
+Authorization: Bearer {{accessToken}}
+
+###############################################################################
+# 21. Actualizar parcialmente -> 200 (PATCH: basta con el campo que cambia)
+###############################################################################
+
+PATCH {{baseUrl}}/todos/{{todoId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "completed": true
+}
+
+###############################################################################
+# 21b. Cuerpo vacio -> 422 (el .refine() exige al menos un campo)
+###############################################################################
+
+PATCH {{baseUrl}}/todos/{{todoId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{}
+
+###############################################################################
+# 21e. Titulo vacio al actualizar -> 422 "El titulo NO PUEDE ESTAR VACIO".
+#      Mensaje distinto al de crear a proposito: en PATCH el titulo es opcional,
+#      asi que "es obligatorio" seria falso. Mandarlo vacio si es un error.
+###############################################################################
+
+PATCH {{baseUrl}}/todos/{{todoId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": "   "
+}
+
+###############################################################################
+# 21c. Id que no es un UUID -> 422, no 500
+###############################################################################
+
+PATCH {{baseUrl}}/todos/abc
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "completed": true
+}
+
+###############################################################################
+# 21d. Tarea inexistente -> 404
+###############################################################################
+
+PATCH {{baseUrl}}/todos/00000000-0000-4000-8000-000000000000
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "completed": true
+}
+
+###############################################################################
+# 22. Eliminar -> 204 sin cuerpo
+###############################################################################
+
+DELETE {{baseUrl}}/todos/{{todoId}}
+Authorization: Bearer {{accessToken}}
+
+###############################################################################
+# 22b. Eliminar la misma tarea otra vez -> 404
+###############################################################################
+
+DELETE {{baseUrl}}/todos/{{todoId}}
+Authorization: Bearer {{accessToken}}
+
+###############################################################################
+# 23. PROPIEDAD: un segundo usuario NO puede tocar las tareas del primero.
+#     Ejecuta 23a y 23b, y luego 23c/23d con un @todoId del PRIMER usuario
+#     (vuelve a crear uno con el bloque 19 antes de probar).
+#     Ambos deben responder 404, no 403: no se confirma que el id exista.
+###############################################################################
+
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "intrusa@example.com",
+  "password": "Secreta123",
+  "name": "Intrusa"
+}
+
+###############################################################################
+# 23b. Login del segundo usuario
+###############################################################################
+
+# @name loginIntrusa
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "intrusa@example.com",
+  "password": "Secreta123"
+}
+
+@intrusaToken = {{loginIntrusa.response.body.accessToken}}
+
+###############################################################################
+# 23c. La intrusa lista SUS tareas -> 200, sin rastro de las del primer usuario
+###############################################################################
+
+GET {{baseUrl}}/todos
+Authorization: Bearer {{intrusaToken}}
+
+###############################################################################
+# 23d. La intrusa intenta modificar una tarea ajena -> 404
+###############################################################################
+
+PATCH {{baseUrl}}/todos/{{todoId}}
+Content-Type: application/json
+Authorization: Bearer {{intrusaToken}}
+
+{
+  "title": "Secuestrada"
+}
+
+###############################################################################
+# 23e. La intrusa intenta borrar una tarea ajena -> 404
+###############################################################################
+
+DELETE {{baseUrl}}/todos/{{todoId}}
+Authorization: Bearer {{intrusaToken}}

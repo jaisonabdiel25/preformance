@@ -6,20 +6,24 @@ import { env as defaultEnv, type Env } from "./config/env.js";
 import { AuthController } from "./controllers/AuthController.js";
 import { CountryController } from "./controllers/CountryController.js";
 import { HealthController } from "./controllers/HealthController.js";
+import { TodoController } from "./controllers/TodoController.js";
 import { AuthMiddleware } from "./middlewares/AuthMiddleware.js";
 import { CountryRepository } from "./repositories/implementations/CountryRepository.js";
 import { HealthRepository } from "./repositories/implementations/HealthRepository.js";
 import { RefreshTokenRepository } from "./repositories/implementations/RefreshTokenRepository.js";
 import { RoleRepository } from "./repositories/implementations/RoleRepository.js";
+import { TodoRepository } from "./repositories/implementations/TodoRepository.js";
 import { UserRepository } from "./repositories/implementations/UserRepository.js";
 import { AuthService } from "./services/implementations/AuthService.js";
 import { CountryService } from "./services/implementations/CountryService.js";
 import { HealthService } from "./services/implementations/HealthService.js";
 import { PasswordService } from "./services/implementations/PasswordService.js";
 import { RoleService } from "./services/implementations/RoleService.js";
+import { TodoService } from "./services/implementations/TodoService.js";
 import { TokenService } from "./services/implementations/TokenService.js";
 import type { IRoleService } from "./services/interfaces/IRoleService.js";
 import { AuthValidator } from "./validators/AuthValidator.js";
+import { TodoValidator } from "./validators/TodoValidator.js";
 
 /** Piezas que la capa HTTP necesita del contenedor. */
 export interface Container {
@@ -34,6 +38,8 @@ export interface Container {
   refreshRateLimiter: RequestHandler;
   countryController: CountryController;
   healthController: HealthController;
+  todoController: TodoController;
+  todoValidator: TodoValidator;
   /**
    * Comprobacion de integridad del catalogo de roles. La ejecuta `server.ts` antes
    * de aceptar trafico; no la consume ninguna ruta.
@@ -65,6 +71,7 @@ export function buildContainer(env: Env = defaultEnv): Container {
   const countryRepository = new CountryRepository(prisma);
   const roleRepository = new RoleRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
+  const todoRepository = new TodoRepository(prisma);
 
   // --- Servicios: implementan I*Service, sin dependencias de HTTP -----------
   const passwordService = new PasswordService(env.BCRYPT_ROUNDS);
@@ -87,12 +94,15 @@ export function buildContainer(env: Env = defaultEnv): Container {
   const countryService = new CountryService(countryRepository);
   const roleService = new RoleService(roleRepository);
   const healthService = new HealthService(healthRepository);
+  const todoService = new TodoService(todoRepository);
 
   // --- Capa HTTP ------------------------------------------------------------
   const authController = new AuthController(authService);
   const countryController = new CountryController(countryService);
   const healthController = new HealthController(healthService);
+  const todoController = new TodoController(todoService);
   const authValidator = new AuthValidator();
+  const todoValidator = new TodoValidator();
   const authMiddleware = new AuthMiddleware(tokenService);
 
   const windowMs = env.AUTH_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
@@ -132,6 +142,8 @@ export function buildContainer(env: Env = defaultEnv): Container {
     refreshRateLimiter,
     countryController,
     healthController,
+    todoController,
+    todoValidator,
     roleService,
     shutdown: async () => {
       // El orden importa: Prisma primero, para que suelte las conexiones que tenga

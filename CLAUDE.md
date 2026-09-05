@@ -106,6 +106,24 @@ Ambas interfaces se mantienen ajustadas a lo que los endpoints realmente llaman.
 
 Índices de `refresh_tokens`: el único de `token_hash` (que es el que resuelve `findActiveByHash`) y uno sobre `user_id` para el borrado en cascada. El índice parcial que existía antes desapareció al pasar a Prisma, que no sabe expresarlos en el esquema — no se echa en falta porque su consumidor tampoco existe ya. Si algún día hace falta uno parcial, se añade editando a mano el SQL de una migración generada.
 
+### El módulo de tareas (`todos`)
+
+Primer recurso del proyecto que **pertenece a un usuario**, y por eso el que fija el patrón para los siguientes. Endpoints en `routes/todo.routes.ts`, todos bajo `authMiddleware.handle`: `GET /todos` (las del token), `POST /todos`, `PATCH /todos/:id`, `DELETE /todos/:id`.
+
+**El `userId` no es un parámetro, es una constante del token.** Es la única regla dura del módulo, y se sostiene con tres barreras alineadas, igual que el rol no autoasignable de `/register`:
+
+1. **El esquema Zod.** `createTodoSchema` y `updateTodoSchema` son `z.strictObject` y **no declaran `userId`**: un `{"title":"x","userId":"<ajeno>"}` se corta con 422 antes de llegar al servicio.
+2. **El controlador.** `TodoController.userIdOf(req)` lo saca de `req.user.id`, que rellena `AuthMiddleware` tras verificar la firma. No hay otra fuente.
+3. **El repositorio.** Ningún método de `ITodoRepository` acepta un `id` sin su `userId` al lado — no existe un `findById(id)` que llamar por descuido. La comprobación de propiedad está en la firma, así que no se puede olvidar.
+
+De ahí sale el **404** (no 403) al tocar una tarea ajena: el `where` lleva siempre `{ id, userId }`, así que una tarea de otro y una inexistente recorren el mismo camino y devuelven lo mismo. El mensaje único `"Tarea no encontrada"` vive en `TodoService`, con el mismo criterio que el 401 genérico del login: distinguir los casos regalaría un oráculo para saber qué identificadores existen. Por la misma razón `DELETE` no es idempotente como `/logout`: aquí callar ocultaría al usuario que su petición no hizo nada.
+
+`updateByIdAndUserId` mete el `userId` en el `where` del propio `UPDATE` (Prisma lo permite junto a la clave única), no en un `SELECT` previo: no hay ventana entre comprobar la propiedad y escribir. `deleteByIdAndUserId` usa `deleteMany` para recibir un contador en vez de una excepción cuando no hay fila.
+
+`title` se valida con `.trim()` **antes** de `.min(1)`, en creación y en actualización, para que `"   "` no pase como título. El mensaje se parametriza (`titleField(mensaje)`): al crear es *"El titulo es obligatorio"*; en el PATCH, donde el campo es opcional, es *"El titulo no puede estar vacio"* — un único mensaje mentiría en uno de los dos. `description` en `updateTodoSchema` es `.nullable()` además de opcional: `undefined` significa "no la toques", `null` significa "bórrala".
+
+Índice de `todos`: uno solo, compuesto `(user_id, created_at)`. Cubre el listado entero —filtrar por usuario y ordenar por fecha descendente— sin ordenación en memoria, y al ser `user_id` el prefijo izquierdo sirve también al borrado en cascada. Un índice suelto sobre `user_id`, como el de `refresh_tokens`, sería redundante encima de este.
+
 ## Convenciones
 
 - **ESM con `module: "nodenext"`**: los imports relativos llevan extensión `.js` aunque el fuente sea `.ts`. No es una errata. Aplica también al cliente generado: `../generated/prisma/client.js`, nunca `../generated/prisma`.
@@ -124,11 +142,14 @@ Son deliberadas y fáciles de romper sin querer:
 - `toPublicUser()` construye la respuesta campo a campo, de modo que un campo nuevo del modelo no puede escaparse solo. Además acepta `UserRow`, que ya no tiene `passwordHash`, así que el hash ni siquiera es visible desde ahí.
 - El login devuelve un único 401 genérico tanto para "email desconocido" como para "contraseña incorrecta", **y además** ejecuta `passwordService.fakeCompare` en la rama del email desconocido para que el tiempo de respuesta no revele qué cuentas existen.
 - Los esquemas usan `z.strictObject` y rechazan campos no declarados. **De esto depende que el rol no sea autoasignable**: ni `role` ni `roleCode` están en `registerSchema`, así que colarlos en el cuerpo da 422 en vez de llegar al servicio. `CreateUserData` tampoco los incluye, y el valor lo fija el `@default("USER")` de la columna escalar. Son tres barreras alineadas: relajar `strictObject` a `z.object` derriba la primera de golpe. Promocionar a ADMIN es hoy una operación manual (Prisma Studio o SQL).
+- **La misma alineación protege el `userId` de un `todo`**: no está en `createTodoSchema` ni en `updateTodoSchema`, el controlador lo toma de `req.user.id`, y `ITodoRepository` no ofrece ninguna consulta que no lo lleve en la firma. Ver «El módulo de tareas» más arriba.
 - `jwt.verify` fija `algorithms: ["HS256"]`; sin eso un atacante puede presentar `alg: "none"` o forzar una confusión de algoritmo.
 - `/register` y `/login` comparten un cupo estricto de rate limit; `/refresh` tiene el suyo, más holgado. Unificarlos haría que los logins fallidos consumieran el presupuesto de renovación y echaran de la sesión a usuarios legítimos.
 
 ## Añadir un módulo
 
 Para `products`: modelo en `prisma/schema.prisma` + `npm run migrate:dev` → `repositories/interfaces/IProductRepository.ts` → `repositories/implementations/ProductRepository.ts` → `services/interfaces/IProductService.ts` → `services/implementations/ProductService.ts` → `validators/schemas/product.schemas.ts` + `validators/ProductValidator.ts` → `controllers/ProductController.ts` + `routes/product.routes.ts`, y luego cablearlo en `container.ts` y registrarlo en `routes/index.ts`. Esos dos últimos son los únicos archivos existentes que cambian.
+
+El módulo `todos` es el ejemplo completo de esa receta: un recurso con dueño, protegido por `AuthMiddleware`, con validación de parámetros de ruta y un `prisma-error.ts` que gana un helper (`isRecordNotFoundError`, para el `P2025`) en vez de dejar que el código de Prisma se escape del repositorio.
 
 Los DTO de entrada se siguen definiendo con Zod a mano. Un generador tipo `zod-prisma-types` derivaría del esquema los tipos, longitudes y nulabilidad, pero no reglas de negocio como "la contraseña debe llevar una mayúscula" ni el `.strictObject` que rechaza campos no declarados. El esquema Prisma describe la tabla; el esquema Zod describe qué acepta la API. Son cosas distintas y ambas hacen falta.

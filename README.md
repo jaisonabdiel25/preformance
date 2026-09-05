@@ -1,6 +1,6 @@
 # Preformance API
 
-API REST de autenticación construida con **Node.js + Express 5 + TypeScript + Prisma 7 + PostgreSQL**, siguiendo el **patrón repository** con inyección de dependencias por constructor.
+API REST construida con **Node.js + Express 5 + TypeScript + Prisma 7 + PostgreSQL**, siguiendo el **patrón repository** con inyección de dependencias por constructor. Incluye autenticación con tokens (access + refresh rotatorio) y, sobre esa base, un primer recurso con dueño: las tareas (`todos`).
 
 ---
 
@@ -67,40 +67,58 @@ src/
 ├── generated/prisma/           · cliente tipado (generado, ignorado por git)
 ├── controllers/
 │   ├── AuthController.ts
-│   └── HealthController.ts
+│   ├── CountryController.ts
+│   ├── HealthController.ts
+│   └── TodoController.ts
 ├── services/
 │   ├── interfaces/               · el QUÉ
 │   │   ├── IAuthService.ts
+│   │   ├── ICountryService.ts
 │   │   ├── IHealthService.ts
 │   │   ├── IPasswordService.ts
+│   │   ├── IRoleService.ts
+│   │   ├── ITodoService.ts
 │   │   └── ITokenService.ts
 │   └── implementations/          · el CÓMO
 │       ├── AuthService.ts
+│       ├── CountryService.ts
 │       ├── HealthService.ts
 │       ├── PasswordService.ts    · bcrypt
+│       ├── RoleService.ts        · verifica el catálogo de roles al arrancar
+│       ├── TodoService.ts
 │       └── TokenService.ts       · JWT + token opaco
 ├── repositories/
 │   ├── interfaces/
+│   │   ├── ICountryRepository.ts
 │   │   ├── IHealthRepository.ts
 │   │   ├── IRefreshTokenRepository.ts
+│   │   ├── IRoleRepository.ts
+│   │   ├── ITodoRepository.ts
 │   │   └── IUserRepository.ts
 │   └── implementations/          · todo lo específico de Prisma
+│       ├── CountryRepository.ts
 │       ├── HealthRepository.ts
 │       ├── RefreshTokenRepository.ts
+│       ├── RoleRepository.ts
+│       ├── TodoRepository.ts
 │       ├── UserRepository.ts
-│       └── prisma-error.ts       · traduce P2002 a ConflictError
+│       └── prisma-error.ts       · traduce P2002 / P2003 / P2025 a errores de dominio
 ├── validators/
-│   ├── schemas/auth.schemas.ts
+│   ├── schemas/
+│   │   ├── auth.schemas.ts
+│   │   └── todo.schemas.ts
 │   ├── AuthValidator.ts
+│   ├── TodoValidator.ts
 │   └── Validator.ts
 ├── middlewares/
 │   ├── AuthMiddleware.ts
 │   ├── ErrorMiddleware.ts
 │   ├── NotFoundMiddleware.ts
 │   └── ValidateMiddleware.ts
+├── constants/      · ROLE y los códigos de rol conocidos por el código
 ├── routes/         · declaración de rutas y su cadena de middlewares
 ├── errors/         · jerarquía AppError y su traducción a códigos HTTP
-├── dtos/           · proyecciones de salida (toPublicUser)
+├── dtos/           · proyecciones de salida (toPublicUser, toPublicTodo)
 ├── config/         · entorno validado con Zod, y cliente Prisma sobre un pool de pg
 ├── types/          · tipos de fila (derivados de Prisma) y augmentación de Express
 ├── container.ts    · composition root
@@ -141,8 +159,10 @@ Cada capa declara sus dependencias como **interfaces**, nunca como clases concre
 | `AuthController` | `IAuthService` |
 | `AuthService` | `IUserRepository`, `IRefreshTokenRepository`, `IPasswordService`, `ITokenService` |
 | `AuthMiddleware` | `ITokenService` |
+| `TodoController` | `ITodoService` |
+| `TodoService` | `ITodoRepository` |
+| `CountryController` | `ICountryService` |
 | `HealthController` | `IHealthService` |
-| `HealthService` | `IHealthRepository` |
 
 Esto es lo que hace la lógica de negocio verificable de forma aislada: `AuthService` no conoce Prisma, ni bcrypt, ni JWT, así que un test puede inyectar dobles instantáneos en lugar de levantar una base de datos y ejecutar bcrypt real (~200 ms por hash con coste 12).
 
@@ -159,7 +179,7 @@ Para `products`, por ejemplo:
 7. `controllers/ProductController.ts` y `routes/product.routes.ts`.
 8. Cablearlo en [src/container.ts](src/container.ts) y registrarlo en [src/routes/index.ts](src/routes/index.ts).
 
-Ningún archivo existente cambia salvo esos dos últimos.
+Ningún archivo existente cambia salvo esos dos últimos (y `prisma-error.ts` si el módulo necesita traducir un código de Prisma nuevo, como hizo `todos` con el `P2025`). El módulo `todos` —un recurso con dueño, protegido por `AuthMiddleware`— es el ejemplo completo de esta receta.
 
 ---
 
@@ -176,6 +196,10 @@ Base: `/api/v1`
 | `POST` | `/api/v1/auth/logout` | — | Revoca el refresh token. `204` |
 | `GET` | `/api/v1/auth/me` | Bearer | Perfil del usuario autenticado |
 | `GET` | `/api/v1/countries` | — | Catálogo de países. Público: el formulario de registro lo necesita antes de que exista ningún usuario |
+| `GET` | `/api/v1/todos` | Bearer | Tareas del usuario autenticado. `200` con `{ todos: [...] }` |
+| `POST` | `/api/v1/todos` | Bearer | Crea una tarea. `201` con `{ todo }` |
+| `PATCH` | `/api/v1/todos/:id` | Bearer | Actualiza parcialmente una tarea propia. `200` con `{ todo }` |
+| `DELETE` | `/api/v1/todos/:id` | Bearer | Elimina una tarea propia. `204` |
 
 ### Formato de respuesta
 
@@ -225,6 +249,17 @@ El precio de la tabla es que `user.role.code` es un `string` para TypeScript: un
 2. **El arranque verifica el catálogo.** `RoleService.assertKnownRolesExist()` corre antes de escuchar y aborta el proceso si falta algún código de `ROLE` en la tabla. Un desajuste entre código y datos revienta el arranque con un mensaje concreto en lugar de manifestarse como un permiso denegado inexplicable.
 
 Promocionar a ADMIN es hoy una operación manual (`npm run db:studio` o SQL). No hay guard `requireRole` todavía.
+
+### Tareas
+
+El primer recurso que **pertenece a un usuario**. Todos los endpoints exigen `Bearer`, y el dueño de cada tarea sale del token, nunca de la URL ni del cuerpo:
+
+- **`GET /api/v1/todos`** devuelve sólo las tareas del usuario autenticado, de la más reciente a la más antigua. No hay `/todos/user/:id`: no existe forma de pedir las de otro.
+- **`POST`** acepta `title` (obligatorio, 1–200 tras recortar) y `description` (opcional, máx. 2000). `userId` y `completed` **se rechazan** en el cuerpo — el primero lo pone el token, el segundo nace en `false`.
+- **`PATCH`** es parcial: manda sólo los campos que cambian, y al menos uno. `title` vacío se rechaza también aquí; `description: null` la borra, omitirla la deja intacta.
+- **`DELETE`** responde `204`, o `404` si la tarea no existe **o es de otro usuario** — no se distinguen los dos casos a propósito.
+
+Que el `userId` no sea manipulable se apoya en tres barreras alineadas: `strictObject` no lo declara en el esquema, el controlador lo toma de `req.user`, y el repositorio no ofrece ninguna consulta sin él. Tocar una tarea ajena da `404`, no `403`: la respuesta no confirma que ese identificador exista.
 
 Todos los errores salen con la misma forma:
 
